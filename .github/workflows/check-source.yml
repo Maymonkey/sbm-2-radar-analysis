@@ -351,6 +351,105 @@ jobs:
           print(f"Saved: {output}")
           PY
 
+      - name: Check CAPPI colors around SBM-2
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from PIL import Image, ImageDraw
+
+          config = json.loads(Path("config/legend_anchors.json").read_text())
+          area = config["analysis_area"]
+
+          images = sorted(Path("radar_images").glob("*.cappi.png"))
+          if not images:
+              raise SystemExit("No CAPPI images found")
+
+          image_path = images[-1]
+          image = Image.open(image_path).convert("RGB")
+          width, height = image.size
+
+          # สีที่อ่านจาก legend ของภาพ CAPPI
+          palette = {
+              (255,255,255), (0,0,255), (0,1,255), (0,3,255),
+              (0,25,255), (0,51,255), (0,102,255), (0,153,255),
+              (0,204,255), (255,0,255), (255,51,255), (255,153,255),
+              (255,156,255), (255,179,255), (255,204,255), (255,0,0),
+              (255,33,0), (255,51,0), (255,105,0), (255,123,0),
+              (255,138,0), (255,139,0), (255,143,0), (255,176,0),
+              (255,199,0), (255,214,0), (255,255,0), (247,245,0),
+              (232,247,59), (71,255,0), (68,255,0), (51,255,0),
+              (0,224,20), (0,204,51), (0,176,71), (0,125,79),
+              (0,102,79)
+          }
+
+          cx, cy = area["sbm2_pixel_xy"]
+          km_per_pixel = area["source_km_per_pixel"]
+          radius_px = area["radius_km"] / km_per_pixel
+          half_cell_px = area["target_cell_size_km"] / (2 * km_per_pixel)
+
+          # แผนที่อยู่ทางซ้ายของ legend ซึ่งเริ่มประมาณ x=802
+          map_right = min(802, width)
+          circle_pixels = 0
+          circle_matches = 0
+          cell_pixels = 0
+          cell_matches = 0
+
+          overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
+          draw_overlay = ImageDraw.Draw(overlay)
+          pixels = image.load()
+
+          for y in range(height):
+              for x in range(map_right):
+                  in_circle = (x - cx) ** 2 + (y - cy) ** 2 <= radius_px ** 2
+                  if not in_circle:
+                      continue
+
+                  circle_pixels += 1
+                  is_palette_color = pixels[x, y] in palette
+
+                  if is_palette_color:
+                      circle_matches += 1
+                      draw_overlay.point((x, y), fill=(255, 0, 255, 180))
+
+                  in_cell = (
+                      abs(x - cx) <= half_cell_px
+                      and abs(y - cy) <= half_cell_px
+                  )
+                  if in_cell:
+                      cell_pixels += 1
+                      if is_palette_color:
+                          cell_matches += 1
+
+          result = Image.alpha_composite(image.convert("RGBA"), overlay).convert("RGB")
+          draw = ImageDraw.Draw(result)
+          draw.ellipse(
+              (cx-radius_px, cy-radius_px, cx+radius_px, cy+radius_px),
+              outline=(255, 0, 255), width=2
+          )
+          draw.rectangle(
+              (cx-half_cell_px, cy-half_cell_px,
+               cx+half_cell_px, cy+half_cell_px),
+              outline=(0, 255, 255), width=2
+          )
+
+          output = Path("radar_images/diagnostic-palette.png")
+          result.save(output)
+
+          print(f"Input image: {image_path.name}")
+          print(
+              f"Within 60 km: {circle_matches}/{circle_pixels} "
+              f"exact palette-color pixels "
+              f"({circle_matches/circle_pixels*100:.2f}%)"
+          )
+          print(
+              f"Within SBM-2 5 km cell: {cell_matches}/{cell_pixels} "
+              f"exact palette-color pixels "
+              f"({cell_matches/cell_pixels*100:.2f}%)"
+          )
+          print(f"Magenta dots = exact palette matches; saved {output}")
+          PY
+
       - name: Save images as a temporary artifact
         if: success()
         uses: actions/upload-artifact@v4
