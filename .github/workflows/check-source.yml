@@ -469,8 +469,8 @@ jobs:
           marked.save("radar_images/diagnostic-palette.png")
           print(f"Saved {csv_path} and latest-frame diagnostic image")
           PY
-
-           - name: Estimate dBZ levels around SBM-2
+          
+      - name: Estimate dBZ levels around SBM-2
         run: |
           python - <<'PY'
           import csv
