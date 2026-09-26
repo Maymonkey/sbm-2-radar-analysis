@@ -851,7 +851,7 @@ jobs:
 
 
           main()
-          PY      
+          PY
       
       - name: Save images as a temporary artifact
         if: success()
