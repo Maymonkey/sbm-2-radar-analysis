@@ -1,0 +1,33 @@
+{
+  "image_size": {
+    "width": 1076,
+    "height": 800
+  },
+  "legend": {
+    "sample_x": 850,
+    "top_y": 76,
+    "bottom_y": 460
+  },
+  "thresholds": [
+    { "marker_y": 86, "dbz_greater_than": 72 },
+    { "marker_y": 106, "dbz_greater_than": 70 },
+    { "marker_y": 126, "dbz_greater_than": 68 },
+    { "marker_y": 145, "dbz_greater_than": 64 },
+    { "marker_y": 165, "dbz_greater_than": 60 },
+    { "marker_y": 185, "dbz_greater_than": 56 },
+    { "marker_y": 205, "dbz_greater_than": 54 },
+    { "marker_y": 224, "dbz_greater_than": 50 },
+    { "marker_y": 244, "dbz_greater_than": 48 },
+    { "marker_y": 264, "dbz_greater_than": 42 },
+    { "marker_y": 283, "dbz_greater_than": 40 },
+    { "marker_y": 303, "dbz_greater_than": 36 },
+    { "marker_y": 323, "dbz_greater_than": 34 },
+    { "marker_y": 343, "dbz_greater_than": 28 },
+    { "marker_y": 362, "dbz_greater_than": 26 },
+    { "marker_y": 382, "dbz_greater_than": 22 },
+    { "marker_y": 402, "dbz_greater_than": 20 },
+    { "marker_y": 421, "dbz_greater_than": 16 },
+    { "marker_y": 441, "dbz_greater_than": 12 },
+    { "marker_y": 461, "dbz_greater_than": 8 }
+  ]
+}
