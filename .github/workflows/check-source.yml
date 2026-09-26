@@ -470,29 +470,53 @@ jobs:
           print(f"Saved {csv_path} and latest-frame diagnostic image")
           PY
           
-      - name: Estimate dBZ levels around SBM-2
+      - name: Estimate and locate dBZ echoes around SBM-2
         run: |
           python - <<'PY'
           import csv
           import json
+          import math
           import statistics
+          from datetime import datetime, timedelta, timezone
           from pathlib import Path
-          from PIL import Image, ImageDraw
+          from PIL import Image
 
+          # ตัวอย่างสีใน legend และค่า dBZ ที่อ่านจาก marker
+          # ค่าระหว่าง marker เป็นค่าประมาณจาก interpolation
           ANCHORS = [
               (81, 72), (101, 70), (121, 68), (140, 64), (160, 60),
               (180, 56), (200, 54), (219, 50), (239, 48), (259, 42),
               (278, 40), (298, 36), (318, 34), (338, 28), (357, 26),
               (377, 22), (397, 20), (416, 16), (436, 12), (456, 8),
           ]
+
           LEGEND_X = 850
           MAP_RIGHT = 802
           LEGEND_TOP = 76
           LEGEND_BOTTOM = 460
+          DBZ_THRESHOLD = 20
+          MIN_COMPONENT_PIXELS = 5
+          ICT = timezone(timedelta(hours=7))
+
+
+          def get_latest_images():
+              images = sorted(Path("radar_images").glob("*.cappi.png"))[-10:]
+              if not images:
+                  raise SystemExit("No CAPPI images found")
+              return images
+
+
+          def get_frame_times(image_path):
+              """ชื่อไฟล์ใช้ UTC; คืนเวลา UTC และ ICT"""
+              utc_time = datetime.strptime(
+                  image_path.name[:12], "%Y%m%d%H%M"
+              ).replace(tzinfo=timezone.utc)
+
+              ict_time = utc_time.astimezone(ICT)
+              return utc_time, ict_time
 
 
           def estimate_dbz_from_legend_y(y):
-              """ประมาณค่า dBZ จากตำแหน่งสีบน legend"""
               if y <= ANCHORS[0][0]:
                   return float(ANCHORS[0][1])
 
@@ -507,36 +531,35 @@ jobs:
               return None
 
 
-          def build_color_to_dbz(image_path):
-              """อ่านสีจากแถบ legend แล้วผูกสีแต่ละสีเข้ากับค่า dBZ โดยประมาณ"""
-              image = Image.open(image_path).convert("RGB")
+          def build_color_to_dbz(reference_image_path):
+              """อ่านสีของแต่ละแถบใน legend แล้วประมาณค่า dBZ"""
+              image = Image.open(reference_image_path).convert("RGB")
 
               if image.width <= LEGEND_X or image.height <= LEGEND_BOTTOM:
                   raise SystemExit(f"Unexpected image size: {image.size}")
 
-              rows_by_color = {}
+              color_rows = {}
               for y in range(LEGEND_TOP, LEGEND_BOTTOM + 1):
                   color = image.getpixel((LEGEND_X, y))
-                  rows_by_color.setdefault(color, []).append(y)
+                  color_rows.setdefault(color, []).append(y)
 
               return {
                   color: estimate_dbz_from_legend_y(statistics.median(rows))
-                  for color, rows in rows_by_color.items()
+                  for color, rows in color_rows.items()
               }
 
 
-          def get_analysis_points(width, height, center_x, center_y, radius_px, half_cell_px):
-              """สร้างรายการพิกเซลในวงวิเคราะห์ พร้อมระบุว่าอยู่ในเซลล์ SBM-2 หรือไม่"""
+          def make_analysis_points(width, height, center_x, center_y,
+                                   radius_px, half_cell_px):
+              """เลือกพิกเซลในวงวิเคราะห์ และทำเครื่องหมายเซลล์ SBM-2"""
               points = []
-              map_right = min(MAP_RIGHT, width)
 
               for y in range(height):
-                  for x in range(map_right):
-                      in_circle = (
+                  for x in range(min(MAP_RIGHT, width)):
+                      distance_squared = (
                           (x - center_x) ** 2 + (y - center_y) ** 2
-                          <= radius_px ** 2
                       )
-                      if not in_circle:
+                      if distance_squared > radius_px ** 2:
                           continue
 
                       in_cell = (
@@ -548,33 +571,76 @@ jobs:
               return points
 
 
-          def find_stable_label_mask(images, points, color_to_dbz):
+          def find_province_label_mask(images, points, color_to_dbz):
               """
-              หาพิกัดที่ถูกอ่านเป็น >=35 dBZ เหมือนกันครบทุกภาพ
-              จากภาพตรวจสอบ พิกัดคงที่ชุดนี้ตรงกับตัวหนังสือชื่อจังหวัด
+              หาตำแหน่ง >=35 dBZ ที่ปรากฏทุกภาพ
+              ใช้เป็น mask ตัดตัวหนังสือชื่อจังหวัดตามที่ตรวจจากภาพ
               """
-              masks_by_frame = []
+              frame_masks = []
 
               for image_path in images:
                   image = Image.open(image_path).convert("RGB")
                   pixels = image.load()
-                  frame_mask = set()
+                  mask = set()
 
                   for x, y, _ in points:
                       dbz = color_to_dbz.get(pixels[x, y])
                       if dbz is not None and dbz >= 35:
-                          frame_mask.add((x, y))
+                          mask.add((x, y))
 
-                  masks_by_frame.append(frame_mask)
+                  frame_masks.append(mask)
 
-              if not masks_by_frame:
-                  return set()
-
-              return set.intersection(*masks_by_frame)
+              return set.intersection(*frame_masks) if frame_masks else set()
 
 
-          def analyze_frame(image_path, points, label_mask, color_to_dbz, radius_km):
-              """นับพิกเซล dBZ ในวง 100 กม. และเซลล์ 5 x 5 กม."""
+          def find_echo_components(candidate_dbz):
+              """แบ่งพิกเซลที่ถึงเกณฑ์เป็นกลุ่มที่ติดกัน 8 ทิศ"""
+              remaining = set(candidate_dbz)
+              components = []
+
+              while remaining:
+                  seed = remaining.pop()
+                  stack = [seed]
+                  pixels = [seed]
+
+                  while stack:
+                      x, y = stack.pop()
+
+                      for ny in range(y - 1, y + 2):
+                          for nx in range(x - 1, x + 2):
+                              point = (nx, ny)
+                              if point in remaining:
+                                  remaining.remove(point)
+                                  stack.append(point)
+                                  pixels.append(point)
+
+                  if len(pixels) < MIN_COMPONENT_PIXELS:
+                      continue
+
+                  values = [candidate_dbz[p] for p in pixels]
+                  components.append({
+                      "pixels": pixels,
+                      "pixel_count": len(pixels),
+                      "max_dbz": max(values),
+                      "mean_dbz": sum(values) / len(values),
+                  })
+
+              return components
+
+
+          def bearing_from_center(dx_east_km, dy_north_km):
+              """คำนวณ bearing จากทิศเหนือ ตามเข็มนาฬิกา"""
+              bearing = math.degrees(
+                  math.atan2(dx_east_km, dy_north_km)
+              ) % 360
+
+              compass = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+              direction = compass[int((bearing + 22.5) // 45) % 8]
+              return bearing, direction
+
+
+          def analyze_frame(image_path, points, label_mask, color_to_dbz,
+                            area, center_x, center_y, km_per_pixel):
               image = Image.open(image_path).convert("RGB")
               pixels = image.load()
 
@@ -584,10 +650,11 @@ jobs:
               circle_ge35 = 0
               cell_ge20 = 0
               cell_ge35 = 0
-              cell_dbz_values = []
+              cell_dbz = []
+              candidate_dbz = {}
 
               for x, y, in_cell in points:
-                  # ตัดพิกัดตัวหนังสือชื่อจังหวัดออกจากการคำนวณ
+                  # ข้ามพิกเซลตัวหนังสือจังหวัดที่พบตำแหน่งคงที่
                   if (x, y) in label_mask:
                       continue
 
@@ -599,8 +666,9 @@ jobs:
                   if dbz is None:
                       continue
 
-                  if dbz >= 20:
+                  if dbz >= DBZ_THRESHOLD:
                       circle_ge20 += 1
+                      candidate_dbz[(x, y)] = dbz
                       if in_cell:
                           cell_ge20 += 1
 
@@ -610,11 +678,52 @@ jobs:
                           cell_ge35 += 1
 
                   if in_cell:
-                      cell_dbz_values.append(dbz)
+                      cell_dbz.append(dbz)
 
-              return {
+              components = find_echo_components(candidate_dbz)
+
+              component_rows = []
+              for component in components:
+                  xs = [x for x, _ in component["pixels"]]
+                  ys = [y for _, y in component["pixels"]]
+                  centroid_x = sum(xs) / len(xs)
+                  centroid_y = sum(ys) / len(ys)
+
+                  dx_east_km = (centroid_x - center_x) * km_per_pixel
+                  dy_north_km = (center_y - centroid_y) * km_per_pixel
+                  distance_km = math.hypot(dx_east_km, dy_north_km)
+                  bearing, direction = bearing_from_center(
+                      dx_east_km, dy_north_km
+                  )
+
+                  component_rows.append({
+                      "file": image_path.name,
+                      "time_utc": get_frame_times(image_path)[0].isoformat(),
+                      "time_ict": get_frame_times(image_path)[1].isoformat(),
+                      "pixel_count": component["pixel_count"],
+                      "area_km2_approx": round(
+                          component["pixel_count"] * km_per_pixel ** 2, 2
+                      ),
+                      "centroid_x": round(centroid_x, 1),
+                      "centroid_y": round(centroid_y, 1),
+                      "distance_from_sbm2_km": round(distance_km, 1),
+                      "bearing_from_sbm2_deg": round(bearing, 1),
+                      "direction_from_sbm2": direction,
+                      "max_estimated_dbz": round(component["max_dbz"], 1),
+                      "mean_estimated_dbz": round(component["mean_dbz"], 1),
+                  })
+
+              component_rows.sort(
+                  key=lambda row: row["distance_from_sbm2_km"]
+              )
+              for index, row in enumerate(component_rows, start=1):
+                  row["nearest_component_rank"] = index
+
+              summary = {
                   "file": image_path.name,
-                  "radius_km": radius_km,
+                  "time_utc": get_frame_times(image_path)[0].isoformat(),
+                  "time_ict": get_frame_times(image_path)[1].isoformat(),
+                  "radius_km": area["radius_km"],
                   "circle_pixels": circle_total,
                   "circle_ge20_pixels": circle_ge20,
                   "circle_ge20_percent": round(
@@ -628,73 +737,52 @@ jobs:
                   ) if cell_total else 0,
                   "cell_ge35_pixels": cell_ge35,
                   "cell_max_estimated_dbz": (
-                      round(max(cell_dbz_values), 1)
-                      if cell_dbz_values else ""
+                      round(max(cell_dbz), 1) if cell_dbz else ""
+                  ),
+                  "components_ge20_min5pixels": len(component_rows),
+                  "nearest_component_distance_km": (
+                      component_rows[0]["distance_from_sbm2_km"]
+                      if component_rows else ""
+                  ),
+                  "nearest_component_direction": (
+                      component_rows[0]["direction_from_sbm2"]
+                      if component_rows else ""
                   ),
               }
 
+              return summary, component_rows
 
-          def save_label_mask_image(image_path, label_mask, output_path,
-                                    center_x, center_y, radius_px, half_cell_px):
-              """บันทึกภาพให้เห็นพิกเซลชื่อจังหวัดที่ถูกตัดออก"""
-              image = Image.open(image_path).convert("RGBA")
-              overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
-              overlay_draw = ImageDraw.Draw(overlay)
 
-              for x, y in label_mask:
-                  overlay_draw.point((x, y), fill=(255, 0, 255, 190))
+          def write_csv(path, rows):
+              if not rows:
+                  path.write_text("")
+                  return
 
-              image = Image.alpha_composite(image, overlay).convert("RGB")
-              draw = ImageDraw.Draw(image)
-              draw.ellipse(
-                  (
-                      center_x - radius_px,
-                      center_y - radius_px,
-                      center_x + radius_px,
-                      center_y + radius_px,
-                  ),
-                  outline=(255, 0, 255),
-                  width=2,
-              )
-              draw.rectangle(
-                  (
-                      center_x - half_cell_px,
-                      center_y - half_cell_px,
-                      center_x + half_cell_px,
-                      center_y + half_cell_px,
-                  ),
-                  outline=(0, 255, 255),
-                  width=2,
-              )
-              image.save(output_path)
+              with path.open("w", newline="") as f:
+                  writer = csv.DictWriter(f, fieldnames=rows[0].keys())
+                  writer.writeheader()
+                  writer.writerows(rows)
 
 
           def main():
-              images = sorted(
-                  Path("radar_images").glob("*.cappi.png")
-              )[-10:]
-
-              if not images:
-                  raise SystemExit("No CAPPI images found")
-
+              images = get_latest_images()
               config = json.loads(
                   Path("config/legend_anchors.json").read_text()
               )
               area = config["analysis_area"]
 
               center_x, center_y = area["sbm2_pixel_xy"]
-              radius_km = area["radius_km"]
               km_per_pixel = area["source_km_per_pixel"]
-              cell_size_km = area["target_cell_size_km"]
-
-              radius_px = radius_km / km_per_pixel
-              half_cell_px = cell_size_km / (2 * km_per_pixel)
+              radius_px = area["radius_km"] / km_per_pixel
+              half_cell_px = (
+                  area["target_cell_size_km"] / (2 * km_per_pixel)
+              )
 
               reference = Image.open(images[-1]).convert("RGB")
               width, height = reference.size
-
               color_to_dbz = build_color_to_dbz(images[-1])
-              points = get_analysis_points(
+
+              points = make_analysis_points(
                   width,
                   height,
                   center_x,
@@ -703,70 +791,67 @@ jobs:
                   half_cell_px,
               )
 
-              label_mask = find_stable_label_mask(
-                  images,
-                  points,
-                  color_to_dbz,
+              label_mask = find_province_label_mask(
+                  images, points, color_to_dbz
               )
               print(
                   "Excluded stable province-label pixels: "
                   f"{len(label_mask)}"
               )
+              print("Filename times are UTC; reported times are ICT (UTC+07:00).")
+              print(
+                  f"Component threshold: >= {DBZ_THRESHOLD} dBZ, "
+                  f"minimum {MIN_COMPONENT_PIXELS} connected pixels."
+              )
 
-              rows = [
-                  analyze_frame(
+              summary_rows = []
+              component_rows = []
+
+              for image_path in images:
+                  summary, frame_components = analyze_frame(
                       image_path,
                       points,
                       label_mask,
                       color_to_dbz,
-                      radius_km,
+                      area,
+                      center_x,
+                      center_y,
+                      km_per_pixel,
                   )
-                  for image_path in images
-              ]
+                  summary_rows.append(summary)
+                  component_rows.extend(frame_components)
 
-              output_csv = Path("radar_images/dbz-timeseries.csv")
-              with output_csv.open("w", newline="") as f:
-                  writer = csv.DictWriter(
-                      f,
-                      fieldnames=rows[0].keys(),
-                  )
-                  writer.writeheader()
-                  writer.writerows(rows)
+              summary_path = Path("radar_images/dbz-timeseries.csv")
+              components_path = Path("radar_images/echo-components.csv")
+              write_csv(summary_path, summary_rows)
+              write_csv(components_path, component_rows)
 
               print(
-                  "File | Cell >=20 dBZ | Cell >=35 dBZ "
-                  "| Cell max estimated dBZ"
+                  "Time ICT | Cell >=20 | Max dBZ | "
+                  "Echo groups | Nearest group km / direction"
               )
-              for row in rows:
+              for row in summary_rows:
+                  nearest = (
+                      f"{row['nearest_component_distance_km']} km / "
+                      f"{row['nearest_component_direction']}"
+                      if row["nearest_component_distance_km"] != ""
+                      else "none"
+                  )
                   print(
-                      f"{row['file']} | "
-                      f"{row['cell_ge20_pixels']}/"
-                      f"{row['cell_pixels']} "
+                      f"{row['time_ict']} | "
+                      f"{row['cell_ge20_pixels']}/{row['cell_pixels']} "
                       f"({row['cell_ge20_percent']}%) | "
-                      f"{row['cell_ge35_pixels']}/"
-                      f"{row['cell_pixels']} | "
-                      f"{row['cell_max_estimated_dbz']}"
+                      f"{row['cell_max_estimated_dbz']} | "
+                      f"{row['components_ge20_min5pixels']} | "
+                      f"{nearest}"
                   )
 
-              diagnostic_path = Path(
-                  "radar_images/diagnostic-label-exclusion.png"
-              )
-              save_label_mask_image(
-                  images[-1],
-                  label_mask,
-                  diagnostic_path,
-                  center_x,
-                  center_y,
-                  radius_px,
-                  half_cell_px,
-              )
-
-              print(f"Saved: {output_csv}")
-              print(f"Saved: {diagnostic_path}")
+              print(f"Saved: {summary_path}")
+              print(f"Saved: {components_path}")
 
 
           main()
-          PY
+          PY      
       
       - name: Save images as a temporary artifact
         if: success()
