@@ -29,5 +29,16 @@
     { "marker_y": 421, "dbz_greater_than": 16 },
     { "marker_y": 441, "dbz_greater_than": 12 },
     { "marker_y": 461, "dbz_greater_than": 8 }
-  ]
+  ],
+  "analysis_area": {
+    "sbm2_location": {
+      "latitude": 13.071556,
+      "longitude": 100.777556
+    },
+    "sbm2_pixel_xy": [366, 321],
+    "radius_km": 60,
+    "source_km_per_pixel": 0.6,
+    "target_cell_size_km": 5
+  }
+  
 }
