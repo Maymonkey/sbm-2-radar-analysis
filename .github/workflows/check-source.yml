@@ -2,547 +2,61 @@ name: Check and download Royal Rain radar images
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/**'
+      - 'config/**'
+      - 'requirements.txt'
+      - '.github/workflows/check-source.yml'
 
 permissions:
   contents: read
-  actions: write
-  
+
+concurrency:
+  group: radar-pipeline-${{ github.repository }}
+  cancel-in-progress: false
+
 jobs:
   download-images:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
-
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: write
+    env:
+      PYTHONUNBUFFERED: '1'
     steps:
-
-      - name: Checkout repository
-        uses: actions/checkout@v4
-    
-      - name: Restore previous radar images
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install pinned dependencies
+        run: python -m pip install --disable-pip-version-check --timeout 60 --retries 3 -r requirements.txt
+      - name: Run regression tests
+        run: python -m unittest discover -s tests -v
+      - name: Restore previous radar images and track IDs
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir -p radar_images /tmp/previous-radar-images
-          rm -rf /tmp/previous-radar-images/*
-
-          previous_run_id="$(gh run list \
-            --workflow check-source.yml \
-            --status success \
-            --limit 1 \
-            --json databaseId \
-            --jq '.[0].databaseId // empty')"
-
-          if [ -z "$previous_run_id" ]; then
-            echo "No previous successful workflow run found."
-            exit 0
-          fi
-
-          echo "Restoring radar images from run ${previous_run_id}"
-          if gh run download "$previous_run_id" \
-            --name sattahip-radar-latest-10 \
-            --dir /tmp/previous-radar-images; then
-            find /tmp/previous-radar-images -type f -name '*dBZ.cappi.png' \
-              -exec cp -f {} radar_images/ \;
-          else
-            echo "::warning::Could not restore the previous radar artifact."
-          fi
-
-      - name: Get latest radar image list
-        run: |
-          curl --fail --show-error --location \
-            --connect-timeout 20 \
-            --max-time 90 \
-            --retry 2 \
-            --retry-all-errors \
-            --retry-delay 3 \
-            "https://file.royalrain.go.th/opendata/radar_data/cappi/api.php?station=sattahip" \
-            --output /tmp/radar-index.json
-
-      - name: Download latest 10 images
-        run: |
-          python - <<'PY'
-          import concurrent.futures
-          import json
-          import subprocess
-          import time
-          from pathlib import Path
-          from urllib.parse import urlparse
-
-          with open("/tmp/radar-index.json", encoding="utf-8") as file:
-              payload = json.load(file)
-
-          if payload.get("rc") != 0:
-              raise SystemExit(f"Radar API returned an error: {payload}")
-
-          images = sorted(
-              payload.get("data", []),
-              key=lambda item: item.get("datetime_utc", ""),
-              reverse=True,
-          )[:10]
-
-          if not images:
-              raise SystemExit("Radar API returned no image records.")
-
-          print(f"Images currently listed by API: {len(images)}")
-
-          output_dir = Path("radar_images")
-          output_dir.mkdir(exist_ok=True)
-
-          def download(image):
-              url = image.get("url")
-              timestamp = image.get("datetime_bangkok", "unknown")
-
-              if not url:
-                  return False, timestamp, "Missing image URL"
-
-              # The API currently returns HTTP image links. Use HTTPS for download.
-              if url.startswith("http://"):
-                  url = "https://" + url[len("http://"):]
-
-              filename = Path(urlparse(url).path).name
-              target = output_dir / filename
-
-              for attempt in range(1, 4):
-                  try:
-                      result = subprocess.run(
-                          [
-                              "curl",
-                              "--fail",
-                              "--silent",
-                              "--show-error",
-                              "--location",
-                              "--connect-timeout",
-                              "20",
-                              "--max-time",
-                              "90",
-                              "--output",
-                              str(target),
-                              url,
-                          ],
-                          capture_output=True,
-                          text=True,
-                          timeout=100,
-                      )
-
-                      is_png = False
-                      if result.returncode == 0 and target.exists():
-                          with target.open("rb") as image_file:
-                              is_png = image_file.read(8) == b"\x89PNG\r\n\x1a\n"
-
-                      if is_png:
-                          return True, timestamp, filename
-
-                      error = result.stderr.strip() or "Downloaded file is not a valid PNG"
-
-                  except subprocess.TimeoutExpired:
-                      error = "Download exceeded 100-second safety limit"
-
-                  if target.exists():
-                      target.unlink()
-
-                  if attempt < 3:
-                      time.sleep(3 * attempt)
-
-              return False, timestamp, error
-
-          with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-              results = list(executor.map(download, images))
-
-          for success, timestamp, detail in results:
-              state = "OK" if success else "FAILED"
-              print(f"{state} | {timestamp} | {detail}")
-
-          failures = [result for result in results if not result[0]]
-          if failures:
-              raise SystemExit(f"{len(failures)} image(s) failed to download")
-
-          radar_files = sorted(output_dir.glob("*dBZ.cappi.png"))
-
-          if len(radar_files) < 10:
-              filenames = ", ".join(path.name for path in radar_files)
-              raise SystemExit(
-                  f"Need 10 combined radar images, found {len(radar_files)}. "
-                  f"Files: {filenames}"
-              )
-
-          # Keep only the ten newest scans after combining the prior artifact
-          # with images available in today's API listing.
-          for old_image in radar_files[:-10]:
-              old_image.unlink()
-
-          radar_files = sorted(output_dir.glob("*dBZ.cappi.png"))
-          print(f"Kept {len(radar_files)} latest radar images:")
-          for path in radar_files:
-              print(f"  {path.name}")
-          PY
-          
-      - name: Inspect latest PNG pixel data
-        run: |
-          python -m pip install --disable-pip-version-check --timeout 60 --retries 3 Pillow
-
-          python - <<'PY'
-          from collections import Counter
-          from pathlib import Path
-          from PIL import Image
-
-          files = sorted(Path("radar_images").glob("*.png"))
-          if not files:
-              raise SystemExit("No PNG images found")
-
-          latest = files[-1]
-
-          with Image.open(latest) as image:
-              rgb_image = image.convert("RGB")
-              colors = Counter(rgb_image.getdata())
-
-              print(f"File: {latest.name}")
-              print(f"Format: {image.format}")
-              print(f"Dimensions: {image.width} x {image.height}")
-              print(f"Original color mode: {image.mode}")
-              print(f"Unique RGB colors: {len(colors)}")
-              print("Most common RGB colors:")
-
-              for color, count in colors.most_common(15):
-                  print(f"  RGB {color}: {count} pixels")
-          PY
-
-      - name: Map dBZ thresholds to legend RGB
-        run: |
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          from PIL import Image
-
-          calibration_path = Path("config/legend_anchors.json")
-          with calibration_path.open(encoding="utf-8") as file:
-              calibration = json.load(file)
-
-          files = sorted(Path("radar_images").glob("*.png"))
-          if not files:
-              raise SystemExit("No PNG images found")
-
-          latest = files[-1]
-
-          with Image.open(latest) as image:
-              expected_size = (
-                  calibration["image_size"]["width"],
-                  calibration["image_size"]["height"],
-              )
-
-              if image.size != expected_size:
-                  raise SystemExit(
-                      f"Image size changed: got {image.size}, "
-                      f"expected {expected_size}"
-                  )
-
-              rgb_image = image.convert("RGB")
-              sample_x = calibration["legend"]["sample_x"]
-
-              print(f"Legend sample from: {latest.name}")
-              print("Threshold | Marker Y | Sample Y | Legend RGB")
-
-              for anchor in calibration["thresholds"]:
-                  marker_y = anchor["marker_y"]
-                  sample_y = marker_y - 5
-
-                  if not (0 <= sample_x < image.width):
-                      raise SystemExit(f"Legend x-coordinate is invalid: {sample_x}")
-
-                  if not (0 <= sample_y < image.height):
-                      raise SystemExit(f"Legend y-coordinate is invalid: {sample_y}")
-
-                  rgb = rgb_image.getpixel((sample_x, sample_y))
-                  threshold = anchor["dbz_greater_than"]
-
-                  print(
-                      f"> {threshold:>2} dBZ | "
-                      f"{marker_y:>3} | {sample_y:>3} | {rgb}"
-                  )
-          PY
-
-      - name: Compare legend palette with map pixels
-        run: |
-          python - <<'PY'
-          import math
-          from pathlib import Path
-          from PIL import Image
-
-          files = sorted(Path("radar_images").glob("*.png"))
-          if not files:
-              raise SystemExit("No PNG images found")
-
-          latest = files[-1]
-
-          with Image.open(latest) as image:
-              rgb_image = image.convert("RGB")
-
-              # Build the complete palette from the legend color bar.
-              x = 850
-              palette_runs = []
-
-              for y in range(76, 461):
-                  rgb = rgb_image.getpixel((x, y))
-
-                  if not palette_runs or palette_runs[-1]["rgb"] != rgb:
-                      palette_runs.append({"rgb": rgb})
-              palette = [run["rgb"] for run in palette_runs]
-
-              # The map is on the left; the legend panel begins around x=802.
-              map_pixels = rgb_image.crop((0, 0, 802, 800))
-              colors = map_pixels.getcolors(maxcolors=1_000_000)
-
-              if colors is None:
-                  raise SystemExit("Too many unique colors to inspect")
-
-          limits = (0, 10, 25, 50, 100)
-          matched_pixels = {limit: 0 for limit in limits}
-          closest_colors = []
-
-          for count, rgb in colors:
-              best_distance_squared = None
-              best_palette_rgb = None
-
-              for palette_rgb in palette:
-                  distance_squared = sum(
-                      (int(a) - int(b)) ** 2
-                      for a, b in zip(rgb, palette_rgb)
-                  )
-
-                  if (
-                      best_distance_squared is None
-                      or distance_squared < best_distance_squared
-                  ):
-                      best_distance_squared = distance_squared
-                      best_palette_rgb = palette_rgb
-
-              distance = math.sqrt(best_distance_squared)
-
-              for limit in limits:
-                  if distance <= limit:
-                      matched_pixels[limit] += count
-
-              if distance <= 50:
-                  closest_colors.append(
-                      (count, rgb, best_palette_rgb, round(distance, 1))
-                  )
-
-          total_pixels = 802 * 800
-          print(f"Image: {latest.name}")
-          print(f"Legend color bands found: {len(palette)}")
-          print(f"Map pixels checked: {total_pixels}")
-
-          for limit in limits:
-              count = matched_pixels[limit]
-              percent = 100 * count / total_pixels
-              print(
-                  f"Pixels within RGB distance {limit}: "
-                  f"{count} ({percent:.2f}%)"
-              )
-
-          print("Most frequent map colors close to the legend palette:")
-          for count, rgb, nearest, distance in sorted(
-              closest_colors, reverse=True
-          )[:15]:
-              print(
-                  f"RGB {rgb} x {count} pixels -> "
-                  f"nearest legend {nearest}, distance {distance}"
-              )
-          PY
-
-      - name: Draw SBM-2 analysis area
-        run: |
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          from PIL import Image, ImageDraw
-
-          config = json.loads(Path("config/legend_anchors.json").read_text())
-          area = config["analysis_area"]
-
-          images = sorted(Path("radar_images").glob("*.cappi.png"))
-          if not images:
-              raise SystemExit("No CAPPI images found in radar_images/")
-
-          image_path = images[-1]
-          image = Image.open(image_path).convert("RGB")
-          draw = ImageDraw.Draw(image)
-
-          cx, cy = area["sbm2_pixel_xy"]
-          km_per_pixel = area["source_km_per_pixel"]
-          radius_px = area["radius_km"] / km_per_pixel
-          half_cell_px = area["target_cell_size_km"] / (2 * km_per_pixel)
-
-          # วงสีชมพู: พื้นที่รอบ SBM-2 ระยะ 60 กม.
-          draw.ellipse(
-              (cx - radius_px, cy - radius_px, cx + radius_px, cy + radius_px),
-              outline=(255, 0, 255),
-              width=3,
-          )
-
-          # กรอบสีฟ้า: เซลล์ 5 × 5 กม. ตรงจุด SBM-2
-          draw.rectangle(
-              (cx - half_cell_px, cy - half_cell_px,
-               cx + half_cell_px, cy + half_cell_px),
-              outline=(0, 255, 255),
-              width=3,
-          )
-
-          # กากบาทสีขาวแสดงจุดศูนย์กลางที่ตั้งไว้
-          draw.line((cx - 8, cy, cx + 8, cy), fill=(255, 255, 255), width=2)
-          draw.line((cx, cy - 8, cx, cy + 8), fill=(255, 255, 255), width=2)
-
-          output = Path("radar_images/diagnostic-area.png")
-          image.save(output)
-          print(f"Input: {image_path}")
-          print(f"SBM-2 pixel: ({cx}, {cy})")
-          print(f"100 km radius: {radius_px:.1f} pixels")
-          print(f"5 km cell: {2 * half_cell_px:.1f} pixels wide")
-          print(f"Saved: {output}")
-          PY
-
-      - name: Check CAPPI color trend across latest 10 images
-        run: |
-          python - <<'PY'
-          import csv
-          import json
-          from pathlib import Path
-          from PIL import Image, ImageDraw
-
-          config = json.loads(Path("config/legend_anchors.json").read_text())
-          area = config["analysis_area"]
-
-          images = sorted(Path("radar_images").glob("*.cappi.png"))[-10:]
-          if not images:
-              raise SystemExit("No CAPPI images found")
-
-          palette = {
-              (255,255,255), (0,0,255), (0,1,255), (0,3,255),
-              (0,25,255), (0,51,255), (0,102,255), (0,153,255),
-              (0,204,255), (255,0,255), (255,51,255), (255,153,255),
-              (255,156,255), (255,179,255), (255,204,255), (255,0,0),
-              (255,33,0), (255,51,0), (255,105,0), (255,123,0),
-              (255,138,0), (255,139,0), (255,143,0), (255,176,0),
-              (255,199,0), (255,214,0), (255,255,0), (247,245,0),
-              (232,247,59), (71,255,0), (68,255,0), (51,255,0),
-              (0,224,20), (0,204,51), (0,176,71), (0,125,79),
-              (0,102,79)
-          }
-
-          cx, cy = area["sbm2_pixel_xy"]
-          km_per_pixel = area["source_km_per_pixel"]
-          radius_px = area["radius_km"] / km_per_pixel
-          half_cell_px = area["target_cell_size_km"] / (2 * km_per_pixel)
-
-          # สร้างตำแหน่งพิกเซลในวง 60 กม. และนับเซลล์ SBM-2 แยก
-          points = []
-          for y in range(800):
-              for x in range(802):
-                  if (x-cx)**2 + (y-cy)**2 <= radius_px**2:
-                      in_cell = (
-                          abs(x-cx) <= half_cell_px
-                          and abs(y-cy) <= half_cell_px
-                      )
-                      points.append((x, y, in_cell))
-
-          circle_total = len(points)
-          cell_total = sum(in_cell for _, _, in_cell in points)
-          rows = []
-          latest_overlay = None
-
-          for image_path in images:
-              image = Image.open(image_path).convert("RGB")
-              if image.size != (1076, 800):
-                  raise SystemExit(
-                      f"Unexpected image size in {image_path.name}: {image.size}"
-                  )
-
-              pixels = image.load()
-              circle_hits = 0
-              cell_hits = 0
-              hits = []
-
-              for x, y, in_cell in points:
-                  if pixels[x, y] in palette:
-                      circle_hits += 1
-                      hits.append((x, y))
-                      if in_cell:
-                          cell_hits += 1
-
-              row = {
-                  "file": image_path.name,
-                  "circle_matches": circle_hits,
-                  "circle_pixels": circle_total,
-                  "circle_percent": round(100 * circle_hits / circle_total, 2),
-                  "cell_matches": cell_hits,
-                  "cell_pixels": cell_total,
-                  "cell_percent": round(100 * cell_hits / cell_total, 2),
-              }
-              rows.append(row)
-
-              if image_path == images[-1]:
-                  latest_overlay = (image.copy(), hits)
-
-          csv_path = Path("radar_images/palette-timeseries.csv")
-          with csv_path.open("w", newline="") as f:
-              writer = csv.DictWriter(f, fieldnames=rows[0].keys())
-              writer.writeheader()
-              writer.writerows(rows)
-
-          print(f"File | {area['radius_km']}-km palette % | SBM-2 cell palette %")
-          for row in rows:
-              print(
-                  f"{row['file']} | {row['circle_percent']}% "
-                  f"({row['circle_matches']}/{row['circle_pixels']}) | "
-                  f"{row['cell_percent']}% "
-                  f"({row['cell_matches']}/{row['cell_pixels']})"
-              )
-
-          image, hits = latest_overlay
-          marked = image.convert("RGBA")
-          overlay = Image.new("RGBA", marked.size, (0, 0, 0, 0))
-          draw = ImageDraw.Draw(overlay)
-          for x, y in hits:
-              draw.point((x, y), fill=(255, 0, 255, 180))
-
-          marked = Image.alpha_composite(marked, overlay).convert("RGB")
-          draw = ImageDraw.Draw(marked)
-          draw.ellipse(
-              (cx-radius_px, cy-radius_px, cx+radius_px, cy+radius_px),
-              outline=(255, 0, 255), width=2
-          )
-          draw.rectangle(
-              (cx-half_cell_px, cy-half_cell_px,
-               cx+half_cell_px, cy+half_cell_px),
-              outline=(0, 255, 255), width=2
-          )
-          marked.save("radar_images/diagnostic-palette.png")
-          print(f"Saved {csv_path} and latest-frame diagnostic image")
-          PY
-          
-      - name: Analyze radar images and track clouds toward SBM-2
+        run: python scripts/artifact_store.py restore
+      - name: Download and validate the latest available scans
+        run: python scripts/download_radar.py
+      - name: Analyse echo shapes and export track history
         run: python scripts/analyze_radar.py
-
-      - name: Save images as a temporary artifact
-        if: success()
-        uses: actions/upload-artifact@v4
+      - name: Save validated radar bundle
+        id: upload
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
-          name: sattahip-radar-latest-10
+          name: sattahip-radar-latest-10-${{ github.run_id }}-${{ github.run_attempt }}
           path: radar_images/
           if-no-files-found: error
-          retention-days: 1
-          overwrite: true
-          
-      - name: Delete older radar image artifacts
-        if: success()
+          retention-days: 2
+      - name: Delete older radar bundles after upload succeeds
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          gh api --paginate \
-            "repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" \
-            --jq '.artifacts[] | select(.name == "sattahip-radar-latest-10") | "\(.id)\t\(.workflow_run.id)"' \
-            | while IFS=$'\t' read -r artifact_id run_id; do
-                if [ "$run_id" != "$GITHUB_RUN_ID" ]; then
-                  gh api --method DELETE \
-                    "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}"
-                  echo "Deleted previous artifact: ${artifact_id}"
-                fi
-              done
+          NEW_ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+        run: python scripts/artifact_store.py prune

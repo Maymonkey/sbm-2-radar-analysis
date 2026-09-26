@@ -1,0 +1,483 @@
+{
+  "schema_version": 1,
+  "source": {
+    "index_url": "https://file.royalrain.go.th/opendata/radar_data/cappi/api.php?station=sattahip",
+    "host": "file.royalrain.go.th",
+    "path_prefix": "/opendata/radar_data/cappi/sattahip/",
+    "connect_timeout_seconds": 20,
+    "request_timeout_seconds": 120,
+    "attempts": 3,
+    "max_bytes": 16777216,
+    "workers": 2
+  },
+  "image_size": [
+    1076,
+    800
+  ],
+  "map_box": [
+    0,
+    0,
+    802,
+    800
+  ],
+  "radar": {
+    "latitude": 12.649027238747239,
+    "longitude": 100.96279558826618,
+    "pixel_xy": [
+      400,
+      400
+    ],
+    "km_per_pixel": 0.6
+  },
+  "target": {
+    "name": "SBM-2",
+    "latitude": 13.071556,
+    "longitude": 100.777556,
+    "pixel_xy": [
+      366,
+      321
+    ],
+    "cell_size_km": 5,
+    "analysis_radius_km": 100
+  },
+  "georeferencing_verified": false,
+  "legend": {
+    "sample_x": 850,
+    "bands": [
+      {
+        "top_y": 76,
+        "bottom_y": 86,
+        "rgb": [
+          255,
+          255,
+          255
+        ]
+      },
+      {
+        "top_y": 86,
+        "bottom_y": 96,
+        "rgb": [
+          0,
+          0,
+          255
+        ]
+      },
+      {
+        "top_y": 96,
+        "bottom_y": 106,
+        "rgb": [
+          0,
+          1,
+          255
+        ]
+      },
+      {
+        "top_y": 106,
+        "bottom_y": 116,
+        "rgb": [
+          0,
+          3,
+          255
+        ]
+      },
+      {
+        "top_y": 116,
+        "bottom_y": 126,
+        "rgb": [
+          0,
+          25,
+          255
+        ]
+      },
+      {
+        "top_y": 126,
+        "bottom_y": 136,
+        "rgb": [
+          0,
+          51,
+          255
+        ]
+      },
+      {
+        "top_y": 136,
+        "bottom_y": 145,
+        "rgb": [
+          0,
+          102,
+          255
+        ]
+      },
+      {
+        "top_y": 145,
+        "bottom_y": 155,
+        "rgb": [
+          0,
+          153,
+          255
+        ]
+      },
+      {
+        "top_y": 155,
+        "bottom_y": 165,
+        "rgb": [
+          0,
+          204,
+          255
+        ]
+      },
+      {
+        "top_y": 165,
+        "bottom_y": 175,
+        "rgb": [
+          255,
+          0,
+          255
+        ]
+      },
+      {
+        "top_y": 175,
+        "bottom_y": 185,
+        "rgb": [
+          255,
+          51,
+          255
+        ]
+      },
+      {
+        "top_y": 185,
+        "bottom_y": 195,
+        "rgb": [
+          255,
+          153,
+          255
+        ]
+      },
+      {
+        "top_y": 195,
+        "bottom_y": 205,
+        "rgb": [
+          255,
+          156,
+          255
+        ]
+      },
+      {
+        "top_y": 205,
+        "bottom_y": 214,
+        "rgb": [
+          255,
+          179,
+          255
+        ]
+      },
+      {
+        "top_y": 214,
+        "bottom_y": 224,
+        "rgb": [
+          255,
+          204,
+          255
+        ]
+      },
+      {
+        "top_y": 224,
+        "bottom_y": 234,
+        "rgb": [
+          255,
+          0,
+          0
+        ]
+      },
+      {
+        "top_y": 234,
+        "bottom_y": 244,
+        "rgb": [
+          255,
+          33,
+          0
+        ]
+      },
+      {
+        "top_y": 244,
+        "bottom_y": 254,
+        "rgb": [
+          255,
+          51,
+          0
+        ]
+      },
+      {
+        "top_y": 254,
+        "bottom_y": 264,
+        "rgb": [
+          255,
+          105,
+          0
+        ]
+      },
+      {
+        "top_y": 264,
+        "bottom_y": 274,
+        "rgb": [
+          255,
+          123,
+          0
+        ]
+      },
+      {
+        "top_y": 274,
+        "bottom_y": 283,
+        "rgb": [
+          255,
+          138,
+          0
+        ]
+      },
+      {
+        "top_y": 283,
+        "bottom_y": 293,
+        "rgb": [
+          255,
+          139,
+          0
+        ]
+      },
+      {
+        "top_y": 293,
+        "bottom_y": 303,
+        "rgb": [
+          255,
+          143,
+          0
+        ]
+      },
+      {
+        "top_y": 303,
+        "bottom_y": 313,
+        "rgb": [
+          255,
+          176,
+          0
+        ]
+      },
+      {
+        "top_y": 313,
+        "bottom_y": 323,
+        "rgb": [
+          255,
+          199,
+          0
+        ]
+      },
+      {
+        "top_y": 323,
+        "bottom_y": 333,
+        "rgb": [
+          255,
+          214,
+          0
+        ]
+      },
+      {
+        "top_y": 333,
+        "bottom_y": 352,
+        "rgb": [
+          255,
+          255,
+          0
+        ]
+      },
+      {
+        "top_y": 352,
+        "bottom_y": 362,
+        "rgb": [
+          247,
+          245,
+          0
+        ]
+      },
+      {
+        "top_y": 362,
+        "bottom_y": 372,
+        "rgb": [
+          232,
+          247,
+          59
+        ]
+      },
+      {
+        "top_y": 372,
+        "bottom_y": 382,
+        "rgb": [
+          71,
+          255,
+          0
+        ]
+      },
+      {
+        "top_y": 382,
+        "bottom_y": 392,
+        "rgb": [
+          68,
+          255,
+          0
+        ]
+      },
+      {
+        "top_y": 392,
+        "bottom_y": 402,
+        "rgb": [
+          51,
+          255,
+          0
+        ]
+      },
+      {
+        "top_y": 402,
+        "bottom_y": 412,
+        "rgb": [
+          0,
+          224,
+          20
+        ]
+      },
+      {
+        "top_y": 412,
+        "bottom_y": 431,
+        "rgb": [
+          0,
+          204,
+          51
+        ]
+      },
+      {
+        "top_y": 431,
+        "bottom_y": 441,
+        "rgb": [
+          0,
+          176,
+          71
+        ]
+      },
+      {
+        "top_y": 441,
+        "bottom_y": 451,
+        "rgb": [
+          0,
+          125,
+          79
+        ]
+      },
+      {
+        "top_y": 451,
+        "bottom_y": 461,
+        "rgb": [
+          0,
+          102,
+          79
+        ]
+      }
+    ],
+    "thresholds": [
+      {
+        "marker_y": 86,
+        "dbz_greater_than": 72
+      },
+      {
+        "marker_y": 106,
+        "dbz_greater_than": 70
+      },
+      {
+        "marker_y": 126,
+        "dbz_greater_than": 68
+      },
+      {
+        "marker_y": 145,
+        "dbz_greater_than": 64
+      },
+      {
+        "marker_y": 165,
+        "dbz_greater_than": 60
+      },
+      {
+        "marker_y": 185,
+        "dbz_greater_than": 56
+      },
+      {
+        "marker_y": 205,
+        "dbz_greater_than": 54
+      },
+      {
+        "marker_y": 224,
+        "dbz_greater_than": 50
+      },
+      {
+        "marker_y": 244,
+        "dbz_greater_than": 48
+      },
+      {
+        "marker_y": 264,
+        "dbz_greater_than": 42
+      },
+      {
+        "marker_y": 283,
+        "dbz_greater_than": 40
+      },
+      {
+        "marker_y": 303,
+        "dbz_greater_than": 36
+      },
+      {
+        "marker_y": 323,
+        "dbz_greater_than": 34
+      },
+      {
+        "marker_y": 343,
+        "dbz_greater_than": 28
+      },
+      {
+        "marker_y": 362,
+        "dbz_greater_than": 26
+      },
+      {
+        "marker_y": 382,
+        "dbz_greater_than": 22
+      },
+      {
+        "marker_y": 402,
+        "dbz_greater_than": 20
+      },
+      {
+        "marker_y": 421,
+        "dbz_greater_than": 16
+      },
+      {
+        "marker_y": 441,
+        "dbz_greater_than": 12
+      },
+      {
+        "marker_y": 461,
+        "dbz_greater_than": 8
+      }
+    ],
+    "excluded_rgb": [
+      [
+        255,
+        255,
+        255
+      ]
+    ]
+  },
+  "analysis": {
+    "frames": 10,
+    "echo_threshold_dbz": 20,
+    "min_component_pixels": 5,
+    "max_speed_kmh": 100,
+    "max_reconnect_minutes": 12.5,
+    "max_scan_interval_minutes": 9,
+    "max_frame_age_minutes": 18,
+    "forecast_horizon_minutes": 60,
+    "max_fit_residual_km": 2.4,
+    "ambiguity_cost_margin": 0.15
+  }
+}
