@@ -1,0 +1,48 @@
+name: Check Royal Rain radar source
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Get latest radar image list
+        run: |
+          curl --fail --show-error --location --max-time 70 \
+            "https://file.royalrain.go.th/opendata/radar_data/cappi/api.php?station=sattahip" \
+            --output /tmp/radar-index.json
+
+      - name: Print the 10 newest images
+        run: |
+          python - <<'PY'
+          import json
+
+          with open("/tmp/radar-index.json", encoding="utf-8") as file:
+              payload = json.load(file)
+
+          if payload.get("rc") != 0:
+              raise SystemExit(f"API returned an error: {payload}")
+
+          images = payload.get("data", [])
+          images.sort(
+              key=lambda item: item.get("datetime_utc", ""),
+              reverse=True
+          )
+
+          if len(images) < 10:
+              raise SystemExit(f"Expected 10 images; received {len(images)}")
+
+          print(f"Images available: {len(images)}")
+          print("Newest 10:")
+          for image in images[:10]:
+              print(
+                  f'{image.get("datetime_bangkok")} | '
+                  f'{image.get("url")}'
+              )
+          PY
