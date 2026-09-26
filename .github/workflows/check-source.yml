@@ -5,7 +5,8 @@ on:
 
 permissions:
   contents: read
-
+  actions: write
+  
 jobs:
   download-images:
     runs-on: ubuntu-latest
@@ -123,10 +124,27 @@ jobs:
           PY
 
       - name: Save images as a temporary artifact
-        if: always()
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: sattahip-radar-latest-10
           path: radar_images/
-          if-no-files-found: ignore
+          if-no-files-found: error
           retention-days: 1
+          overwrite: true
+          
+      - name: Delete older radar image artifacts
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" \
+            --jq '.artifacts[] | select(.name == "sattahip-radar-latest-10") | "\(.id)\t\(.workflow_run.id)"' \
+            | while IFS=$'\t' read -r artifact_id run_id; do
+                if [ "$run_id" != "$GITHUB_RUN_ID" ]; then
+                  gh api --method DELETE \
+                    "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}"
+                  echo "Deleted previous artifact: ${artifact_id}"
+                fi
+              done
