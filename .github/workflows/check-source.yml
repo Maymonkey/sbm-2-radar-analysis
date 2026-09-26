@@ -17,6 +17,35 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
     
+      - name: Restore previous radar images
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p radar_images /tmp/previous-radar-images
+          rm -rf /tmp/previous-radar-images/*
+
+          previous_run_id="$(gh run list \
+            --workflow check-source.yml \
+            --status success \
+            --limit 1 \
+            --json databaseId \
+            --jq '.[0].databaseId // empty')"
+
+          if [ -z "$previous_run_id" ]; then
+            echo "No previous successful workflow run found."
+            exit 0
+          fi
+
+          echo "Restoring radar images from run ${previous_run_id}"
+          if gh run download "$previous_run_id" \
+            --name sattahip-radar-latest-10 \
+            --dir /tmp/previous-radar-images; then
+            find /tmp/previous-radar-images -type f -name '*dBZ.cappi.png' \
+              -exec cp -f {} radar_images/ \;
+          else
+            echo "::warning::Could not restore the previous radar artifact."
+          fi
+
       - name: Get latest radar image list
         run: |
           curl --fail --show-error --location \
@@ -50,8 +79,10 @@ jobs:
               reverse=True,
           )[:10]
 
-          if len(images) != 10:
-              raise SystemExit(f"Expected 10 images, got {len(images)}")
+          if not images:
+              raise SystemExit("Radar API returned no image records.")
+
+          print(f"Images currently listed by API: {len(images)}")
 
           output_dir = Path("radar_images")
           output_dir.mkdir(exist_ok=True)
@@ -124,7 +155,24 @@ jobs:
           if failures:
               raise SystemExit(f"{len(failures)} image(s) failed to download")
 
-          print(f"Successfully downloaded {len(results)} PNG images.")
+          radar_files = sorted(output_dir.glob("*dBZ.cappi.png"))
+
+          if len(radar_files) < 10:
+              filenames = ", ".join(path.name for path in radar_files)
+              raise SystemExit(
+                  f"Need 10 combined radar images, found {len(radar_files)}. "
+                  f"Files: {filenames}"
+              )
+
+          # Keep only the ten newest scans after combining the prior artifact
+          # with images available in today's API listing.
+          for old_image in radar_files[:-10]:
+              old_image.unlink()
+
+          radar_files = sorted(output_dir.glob("*dBZ.cappi.png"))
+          print(f"Kept {len(radar_files)} latest radar images:")
+          for path in radar_files:
+              print(f"  {path.name}")
           PY
           
       - name: Inspect latest PNG pixel data
