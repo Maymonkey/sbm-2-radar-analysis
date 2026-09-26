@@ -211,6 +211,95 @@ jobs:
                   )
           PY
 
+      - name: Compare legend palette with map pixels
+        run: |
+          python - <<'PY'
+          import math
+          from pathlib import Path
+          from PIL import Image
+
+          files = sorted(Path("radar_images").glob("*.png"))
+          if not files:
+              raise SystemExit("No PNG images found")
+
+          latest = files[-1]
+
+          with Image.open(latest) as image:
+              rgb_image = image.convert("RGB")
+
+              # Build the complete palette from the legend color bar.
+              x = 850
+              palette_runs = []
+
+              for y in range(76, 461):
+                  rgb = rgb_image.getpixel((x, y))
+
+                  if not palette_runs or palette_runs[-1]["rgb"] != rgb:
+                      palette_runs.append({"rgb": rgb})
+              palette = [run["rgb"] for run in palette_runs]
+
+              # The map is on the left; the legend panel begins around x=802.
+              map_pixels = rgb_image.crop((0, 0, 802, 800))
+              colors = map_pixels.getcolors(maxcolors=1_000_000)
+
+              if colors is None:
+                  raise SystemExit("Too many unique colors to inspect")
+
+          limits = (0, 10, 25, 50, 100)
+          matched_pixels = {limit: 0 for limit in limits}
+          closest_colors = []
+
+          for count, rgb in colors:
+              best_distance_squared = None
+              best_palette_rgb = None
+
+              for palette_rgb in palette:
+                  distance_squared = sum(
+                      (int(a) - int(b)) ** 2
+                      for a, b in zip(rgb, palette_rgb)
+                  )
+
+                  if (
+                      best_distance_squared is None
+                      or distance_squared < best_distance_squared
+                  ):
+                      best_distance_squared = distance_squared
+                      best_palette_rgb = palette_rgb
+
+              distance = math.sqrt(best_distance_squared)
+
+              for limit in limits:
+                  if distance <= limit:
+                      matched_pixels[limit] += count
+
+              if distance <= 50:
+                  closest_colors.append(
+                      (count, rgb, best_palette_rgb, round(distance, 1))
+                  )
+
+          total_pixels = 802 * 800
+          print(f"Image: {latest.name}")
+          print(f"Legend color bands found: {len(palette)}")
+          print(f"Map pixels checked: {total_pixels}")
+
+          for limit in limits:
+              count = matched_pixels[limit]
+              percent = 100 * count / total_pixels
+              print(
+                  f"Pixels within RGB distance {limit}: "
+                  f"{count} ({percent:.2f}%)"
+              )
+
+          print("Most frequent map colors close to the legend palette:")
+          for count, rgb, nearest, distance in sorted(
+              closest_colors, reverse=True
+          )[:15]:
+              print(
+                  f"RGB {rgb} x {count} pixels -> "
+                  f"nearest legend {nearest}, distance {distance}"
+              )
+          PY
+
       - name: Save images as a temporary artifact
         if: success()
         uses: actions/upload-artifact@v4
