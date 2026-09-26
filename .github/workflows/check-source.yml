@@ -1,4 +1,4 @@
-name: Check Royal Rain radar source
+name: Check and download Royal Rain radar images
 
 on:
   workflow_dispatch:
@@ -7,42 +7,126 @@ permissions:
   contents: read
 
 jobs:
-  check-source:
+  download-images:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 25
 
     steps:
       - name: Get latest radar image list
         run: |
-          curl --fail --show-error --location --max-time 70 \
+          curl --fail --show-error --location \
+            --connect-timeout 20 \
+            --max-time 90 \
+            --retry 2 \
+            --retry-all-errors \
+            --retry-delay 3 \
             "https://file.royalrain.go.th/opendata/radar_data/cappi/api.php?station=sattahip" \
             --output /tmp/radar-index.json
 
-      - name: Print the 10 newest images
+      - name: Download latest 10 images
         run: |
           python - <<'PY'
+          import concurrent.futures
           import json
+          import subprocess
+          import time
+          from pathlib import Path
+          from urllib.parse import urlparse
 
           with open("/tmp/radar-index.json", encoding="utf-8") as file:
               payload = json.load(file)
 
           if payload.get("rc") != 0:
-              raise SystemExit(f"API returned an error: {payload}")
+              raise SystemExit(f"Radar API returned an error: {payload}")
 
-          images = payload.get("data", [])
-          images.sort(
+          images = sorted(
+              payload.get("data", []),
               key=lambda item: item.get("datetime_utc", ""),
-              reverse=True
-          )
+              reverse=True,
+          )[:10]
 
-          if len(images) < 10:
-              raise SystemExit(f"Expected 10 images; received {len(images)}")
+          if len(images) != 10:
+              raise SystemExit(f"Expected 10 images, got {len(images)}")
 
-          print(f"Images available: {len(images)}")
-          print("Newest 10:")
-          for image in images[:10]:
-              print(
-                  f'{image.get("datetime_bangkok")} | '
-                  f'{image.get("url")}'
-              )
+          output_dir = Path("radar_images")
+          output_dir.mkdir(exist_ok=True)
+
+          def download(image):
+              url = image.get("url")
+              timestamp = image.get("datetime_bangkok", "unknown")
+
+              if not url:
+                  return False, timestamp, "Missing image URL"
+
+              # The API currently returns HTTP image links. Use HTTPS for download.
+              if url.startswith("http://"):
+                  url = "https://" + url[len("http://"):]
+
+              filename = Path(urlparse(url).path).name
+              target = output_dir / filename
+
+              for attempt in range(1, 4):
+                  try:
+                      result = subprocess.run(
+                          [
+                              "curl",
+                              "--fail",
+                              "--silent",
+                              "--show-error",
+                              "--location",
+                              "--connect-timeout",
+                              "20",
+                              "--max-time",
+                              "90",
+                              "--output",
+                              str(target),
+                              url,
+                          ],
+                          capture_output=True,
+                          text=True,
+                          timeout=100,
+                      )
+
+                      is_png = False
+                      if result.returncode == 0 and target.exists():
+                          with target.open("rb") as image_file:
+                              is_png = image_file.read(8) == b"\x89PNG\r\n\x1a\n"
+
+                      if is_png:
+                          return True, timestamp, filename
+
+                      error = result.stderr.strip() or "Downloaded file is not a valid PNG"
+
+                  except subprocess.TimeoutExpired:
+                      error = "Download exceeded 100-second safety limit"
+
+                  if target.exists():
+                      target.unlink()
+
+                  if attempt < 3:
+                      time.sleep(3 * attempt)
+
+              return False, timestamp, error
+
+          with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+              results = list(executor.map(download, images))
+
+          for success, timestamp, detail in results:
+              state = "OK" if success else "FAILED"
+              print(f"{state} | {timestamp} | {detail}")
+
+          failures = [result for result in results if not result[0]]
+          if failures:
+              raise SystemExit(f"{len(failures)} image(s) failed to download")
+
+          print(f"Successfully downloaded {len(results)} PNG images.")
           PY
+
+      - name: Save images as a temporary artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sattahip-radar-latest-10
+          path: radar_images/
+          if-no-files-found: ignore
+          retention-days: 1
