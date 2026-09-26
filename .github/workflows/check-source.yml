@@ -13,6 +13,10 @@ jobs:
     timeout-minutes: 25
 
     steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+    
       - name: Get latest radar image list
         run: |
           curl --fail --show-error --location \
@@ -153,11 +157,16 @@ jobs:
                   print(f"  RGB {color}: {count} pixels")
           PY
 
-      - name: Read CAPPI legend colors
+      - name: Map dBZ thresholds to legend RGB
         run: |
           python - <<'PY'
+          import json
           from pathlib import Path
           from PIL import Image
+
+          calibration_path = Path("config/legend_anchors.json")
+          with calibration_path.open(encoding="utf-8") as file:
+              calibration = json.load(file)
 
           files = sorted(Path("radar_images").glob("*.png"))
           if not files:
@@ -166,33 +175,40 @@ jobs:
           latest = files[-1]
 
           with Image.open(latest) as image:
-              if image.size != (1076, 800):
+              expected_size = (
+                  calibration["image_size"]["width"],
+                  calibration["image_size"]["height"],
+              )
+
+              if image.size != expected_size:
                   raise SystemExit(
-                      f"Unexpected image size {image.size}; "
-                      "legend coordinates need to be checked again"
+                      f"Image size changed: got {image.size}, "
+                      f"expected {expected_size}"
                   )
 
-              # Sample the middle of the color bar, away from its edges.
-              x = 850
-              first_y = 76
-              last_y = 461
+              rgb_image = image.convert("RGB")
+              sample_x = calibration["legend"]["sample_x"]
 
-              runs = []
-              for y in range(first_y, last_y):
-                  rgb = image.convert("RGB").getpixel((x, y))
+              print(f"Legend sample from: {latest.name}")
+              print("Threshold | Marker Y | Sample Y | Legend RGB")
 
-                  if not runs or runs[-1]["rgb"] != rgb:
-                      runs.append({"start": y, "end": y, "rgb": rgb})
-                  else:
-                      runs[-1]["end"] = y
+              for anchor in calibration["thresholds"]:
+                  marker_y = anchor["marker_y"]
+                  sample_y = marker_y - 5
 
-          print(f"Legend sample from: {latest.name}")
-          print("Row range | RGB")
-          for run in runs:
-              print(
-                  f'y={run["start"]}-{run["end"]} | '
-                  f'RGB={run["rgb"]}'
-              )
+                  if not (0 <= sample_x < image.width):
+                      raise SystemExit(f"Legend x-coordinate is invalid: {sample_x}")
+
+                  if not (0 <= sample_y < image.height):
+                      raise SystemExit(f"Legend y-coordinate is invalid: {sample_y}")
+
+                  rgb = rgb_image.getpixel((sample_x, sample_y))
+                  threshold = anchor["dbz_greater_than"]
+
+                  print(
+                      f"> {threshold:>2} dBZ | "
+                      f"{marker_y:>3} | {sample_y:>3} | {rgb}"
+                  )
           PY
 
       - name: Save images as a temporary artifact
