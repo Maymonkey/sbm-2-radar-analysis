@@ -470,74 +470,102 @@ jobs:
           print(f"Saved {csv_path} and latest-frame diagnostic image")
           PY
 
-      - name: Estimate dBZ levels around SBM-2
+           - name: Estimate dBZ levels around SBM-2
         run: |
           python - <<'PY'
           import csv
+          import json
           import statistics
           from pathlib import Path
-          from PIL import Image
+          from PIL import Image, ImageDraw
 
           images = sorted(Path("radar_images").glob("*.cappi.png"))[-10:]
           if not images:
               raise SystemExit("No CAPPI images found")
 
-          # ตำแหน่งสีใน legend -> ค่า dBZ จาก marker ที่อ่านไว้
+          # y ของสีตัวอย่างใน legend และค่า dBZ ที่ระบุบน legend
+          # ตำแหน่งระหว่าง anchor จะเป็นค่าประมาณจากการ interpolate
           anchors = [
-              (81,72), (101,70), (121,68), (140,64), (160,60),
-              (180,56), (200,54), (219,50), (239,48), (259,42),
-              (278,40), (298,36), (318,34), (338,28), (357,26),
-              (377,22), (397,20), (416,16), (436,12), (456,8)
+              (81, 72), (101, 70), (121, 68), (140, 64), (160, 60),
+              (180, 56), (200, 54), (219, 50), (239, 48), (259, 42),
+              (278, 40), (298, 36), (318, 34), (338, 28), (357, 26),
+              (377, 22), (397, 20), (416, 16), (436, 12), (456, 8)
           ]
-
-          # ใช้ภาพล่าสุดอ่านสีจริงจาก legend
-          legend_image = Image.open(images[-1]).convert("RGB")
-          color_rows = {}
-          for y in range(76, 461):
-              color = legend_image.getpixel((850, y))
-              color_rows.setdefault(color, []).append(y)
 
           def estimate_dbz(y):
               if y <= anchors[0][0]:
                   return float(anchors[0][1])
               if y >= anchors[-1][0]:
                   return float(anchors[-1][1])
+
               for (y1, dbz1), (y2, dbz2) in zip(anchors, anchors[1:]):
                   if y1 <= y <= y2:
-                      fraction = (y-y1) / (y2-y1)
-                      return dbz1 + fraction * (dbz2-dbz1)
+                      fraction = (y - y1) / (y2 - y1)
+                      return dbz1 + fraction * (dbz2 - dbz1)
+
+              return None
+
+          # อ่านสี palette และตำแหน่งแนวตั้งจากแถบ legend
+          reference = Image.open(images[-1]).convert("RGB")
+          if reference.width <= 850 or reference.height <= 460:
+              raise SystemExit(f"Unexpected image size: {reference.size}")
+
+          color_rows = {}
+          for y in range(76, 461):
+              color = reference.getpixel((850, y))
+              color_rows.setdefault(color, []).append(y)
 
           color_dbz = {
               color: estimate_dbz(statistics.median(rows))
               for color, rows in color_rows.items()
           }
 
-          # ใช้ตำแหน่งและรัศมีจาก config ที่ตั้งไว้
-          import json
-          config = json.loads(Path("config/legend_anchors.json").read_text())
+          config = json.loads(
+              Path("config/legend_anchors.json").read_text()
+          )
           area = config["analysis_area"]
+
           cx, cy = area["sbm2_pixel_xy"]
           km_per_pixel = area["source_km_per_pixel"]
           radius_px = area["radius_km"] / km_per_pixel
           half_cell_px = area["target_cell_size_km"] / (2 * km_per_pixel)
 
-          points = []
-          for y in range(800):
-              for x in range(802):
-                  if (x-cx)**2 + (y-cy)**2 <= radius_px**2:
-                      in_cell = (
-                          abs(x-cx) <= half_cell_px
-                          and abs(y-cy) <= half_cell_px
-                      )
-                      points.append((x, y, in_cell))
+          width, height = reference.size
+          map_right = min(802, width)
 
+          # เตรียมตำแหน่งพิกเซลในวงรอบ SBM-2
+          points = []
+          for y in range(height):
+              for x in range(map_right):
+                  in_circle = (x - cx) ** 2 + (y - cy) ** 2 <= radius_px ** 2
+                  if not in_circle:
+                      continue
+
+                  in_cell = (
+                      abs(x - cx) <= half_cell_px
+                      and abs(y - cy) <= half_cell_px
+                  )
+                  points.append((x, y, in_cell))
+
+          circle_total = len(points)
+          cell_total = sum(in_cell for _, _, in_cell in points)
           rows = []
+          ge35_masks = []
+
           for image_path in images:
               image = Image.open(image_path).convert("RGB")
-              pixels = image.load()
+              if image.size != reference.size:
+                  raise SystemExit(
+                      f"Image size differs: {image_path.name} {image.size}"
+                  )
 
-              circle20 = circle35 = cell20 = cell35 = 0
+              pixels = image.load()
+              circle20 = 0
+              circle35 = 0
+              cell20 = 0
+              cell35 = 0
               cell_dbz = []
+              frame_ge35 = set()
 
               for x, y, in_cell in points:
                   dbz = color_dbz.get(pixels[x, y])
@@ -548,42 +576,103 @@ jobs:
                       circle20 += 1
                       if in_cell:
                           cell20 += 1
+
                   if dbz >= 35:
                       circle35 += 1
+                      frame_ge35.add((x, y))
                       if in_cell:
                           cell35 += 1
+
                   if in_cell:
                       cell_dbz.append(dbz)
 
-              cell_total = sum(in_cell for _, _, in_cell in points)
+              ge35_masks.append(frame_ge35)
+
               rows.append({
                   "file": image_path.name,
                   "radius_km": area["radius_km"],
+                  "circle_pixels": circle_total,
                   "circle_ge20_pixels": circle20,
                   "circle_ge35_pixels": circle35,
+                  "cell_pixels": cell_total,
                   "cell_ge20_pixels": cell20,
-                  "cell_ge20_percent": round(100*cell20/cell_total, 2),
+                  "cell_ge20_percent": round(100 * cell20 / cell_total, 2),
                   "cell_ge35_pixels": cell35,
                   "cell_max_estimated_dbz": (
                       round(max(cell_dbz), 1) if cell_dbz else ""
                   ),
               })
 
-          output = Path("radar_images/dbz-timeseries.csv")
-          with output.open("w", newline="") as f:
+          # ตรวจว่าพิกัด >=35 dBZ ซ้ำกันระหว่างภาพแรกและภาพล่าสุดแค่ไหน
+          first_mask = ge35_masks[0]
+          last_mask = ge35_masks[-1]
+          first_last_union = first_mask | last_mask
+          first_last_intersection = first_mask & last_mask
+
+          overlap_percent = (
+              100 * len(first_last_intersection) / len(first_last_union)
+              if first_last_union else 0
+          )
+          stable_ge35 = set.intersection(*ge35_masks) if ge35_masks else set()
+
+          print(f"Analysis radius: {area['radius_km']} km")
+          print("File | Cell >=20 dBZ | Cell >=35 dBZ | Cell max estimated dBZ")
+          for row in rows:
+              print(
+                  f"{row['file']} | "
+                  f"{row['cell_ge20_pixels']}/{cell_total} "
+                  f"({row['cell_ge20_percent']}%) | "
+                  f"{row['cell_ge35_pixels']}/{cell_total} | "
+                  f"{row['cell_max_estimated_dbz']}"
+              )
+
+          print(
+              ">=35 dBZ pixel-coordinate overlap, first vs last frame: "
+              f"{len(first_last_intersection)}/{len(first_last_union)} "
+              f"({overlap_percent:.1f}%)"
+          )
+          print(
+              ">=35 dBZ pixel coordinates present in all 10 frames: "
+              f"{len(stable_ge35)}"
+          )
+
+          csv_path = Path("radar_images/dbz-timeseries.csv")
+          with csv_path.open("w", newline="") as f:
               writer = csv.DictWriter(f, fieldnames=rows[0].keys())
               writer.writeheader()
               writer.writerows(rows)
 
-          print("File | cell >=20 dBZ | cell >=35 dBZ | cell max estimated dBZ")
-          for row in rows:
-              print(
-                  f"{row['file']} | {row['cell_ge20_pixels']}/81 "
-                  f"({row['cell_ge20_percent']}%) | "
-                  f"{row['cell_ge35_pixels']}/81 | "
-                  f"{row['cell_max_estimated_dbz']}"
-              )
-          print(f"Saved: {output}")
+          # ทำภาพแสดงพิกเซล >=35 dBZ ที่อยู่ตำแหน่งเดิมครบทั้ง 10 เฟรม
+          diagnostic = reference.convert("RGBA")
+          overlay = Image.new("RGBA", diagnostic.size, (0, 0, 0, 0))
+          draw_overlay = ImageDraw.Draw(overlay)
+
+          for x, y in stable_ge35:
+              draw_overlay.point((x, y), fill=(255, 0, 255, 190))
+
+          diagnostic = Image.alpha_composite(diagnostic, overlay).convert("RGB")
+          draw = ImageDraw.Draw(diagnostic)
+          draw.ellipse(
+              (cx - radius_px, cy - radius_px, cx + radius_px, cy + radius_px),
+              outline=(255, 0, 255),
+              width=2,
+          )
+          draw.rectangle(
+              (
+                  cx - half_cell_px,
+                  cy - half_cell_px,
+                  cx + half_cell_px,
+                  cy + half_cell_px,
+              ),
+              outline=(0, 255, 255),
+              width=2,
+          )
+
+          diagnostic_path = Path("radar_images/diagnostic-stable-ge35.png")
+          diagnostic.save(diagnostic_path)
+
+          print(f"Saved: {csv_path}")
+          print(f"Saved: {diagnostic_path}")
           PY
       
       - name: Save images as a temporary artifact
