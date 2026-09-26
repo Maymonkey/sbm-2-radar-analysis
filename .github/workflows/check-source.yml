@@ -122,6 +122,36 @@ jobs:
 
           print(f"Successfully downloaded {len(results)} PNG images.")
           PY
+          
+      - name: Inspect latest PNG pixel data
+        run: |
+          python -m pip install --disable-pip-version-check --timeout 60 --retries 3 Pillow
+
+          python - <<'PY'
+          from collections import Counter
+          from pathlib import Path
+          from PIL import Image
+
+          files = sorted(Path("radar_images").glob("*.png"))
+          if not files:
+              raise SystemExit("No PNG images found")
+
+          latest = files[-1]
+
+          with Image.open(latest) as image:
+              rgb_image = image.convert("RGB")
+              colors = Counter(rgb_image.getdata())
+
+              print(f"File: {latest.name}")
+              print(f"Format: {image.format}")
+              print(f"Dimensions: {image.width} x {image.height}")
+              print(f"Original color mode: {image.mode}")
+              print(f"Unique RGB colors: {len(colors)}")
+              print("Most common RGB colors:")
+
+              for color, count in colors.most_common(15):
+                  print(f"  RGB {color}: {count} pixels")
+          PY
 
       - name: Save images as a temporary artifact
         if: success()
