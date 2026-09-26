@@ -346,7 +346,7 @@ jobs:
           image.save(output)
           print(f"Input: {image_path}")
           print(f"SBM-2 pixel: ({cx}, {cy})")
-          print(f"60 km radius: {radius_px:.1f} pixels")
+          print(f"100 km radius: {radius_px:.1f} pixels")
           print(f"5 km cell: {2 * half_cell_px:.1f} pixels wide")
           print(f"Saved: {output}")
           PY
@@ -439,7 +439,7 @@ jobs:
               writer.writeheader()
               writer.writerows(rows)
 
-          print("File | 60-km palette % | SBM-2 cell palette %")
+          print(f"File | {area['radius_km']}-km palette % | SBM-2 cell palette %")
           for row in rows:
               print(
                   f"{row['file']} | {row['circle_percent']}% "
