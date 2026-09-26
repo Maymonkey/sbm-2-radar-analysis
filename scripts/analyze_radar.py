@@ -18,6 +18,7 @@ TARGET_CELL_KM = 5
 DBZ_THRESHOLD = 20
 MIN_COMPONENT_PIXELS = 5
 MAX_TRACK_SPEED_KMH = 100
+MAX_TARGET_HEADING_DEVIATION_DEG = 45
 
 MAP_MAX_X = 801
 LEGEND_SAMPLE_X = 850
@@ -205,7 +206,7 @@ def motion_direction(dx, dy):
 
 
 def make_tracks(frames):
-    """Associate cloud components between scans and identify inbound tracks."""
+    """Track echo shapes and confirm only clouds whose motion points toward SBM-2."""
     tracks = {}
     next_id = 1
 
@@ -289,6 +290,7 @@ def make_tracks(frames):
             "latest": latest,
             "status": "building_track",
             "direction": "",
+            "target_alignment_deg": "",
             "speed_kmh": "",
             "eta_min": "",
             "gap_km": round(gap_km, 1),
@@ -321,21 +323,44 @@ def make_tracks(frames):
             ).total_seconds() / 60
 
             if elapsed_min > 0:
-                closing_speed = (
-                    (first["gap_km"] - last["gap_km"])
-                    / elapsed_min * 60
-                )
-
                 dx = last["centroid_x"] - first["centroid_x"]
                 dy = last["centroid_y"] - first["centroid_y"]
                 result["direction"] = motion_direction(dx, dy)
 
-                if steadily_closing and closing_speed > 0:
-                    result["status"] = "inbound"
-                    result["speed_kmh"] = round(closing_speed, 1)
-                    result["eta_min"] = round(
-                        gap_km / closing_speed * 60
+                # Compare the cloud's observed motion vector with the vector
+                # from its latest centroid to the SBM-2 target cell.
+                target_dx = SBM2_XY[0] - last["centroid_x"]
+                target_dy = SBM2_XY[1] - last["centroid_y"]
+                motion_length = math.hypot(dx, dy)
+                target_length = math.hypot(target_dx, target_dy)
+
+                if motion_length > 0 and target_length > 0:
+                    cosine = (
+                        dx * target_dx + dy * target_dy
+                    ) / (motion_length * target_length)
+                    cosine = max(-1.0, min(1.0, cosine))
+                    alignment_deg = math.degrees(math.acos(cosine))
+                    result["target_alignment_deg"] = round(alignment_deg, 1)
+
+                    closing_speed = (
+                        (first["gap_km"] - last["gap_km"])
+                        / elapsed_min * 60
                     )
+
+                    heading_toward_target = (
+                        alignment_deg <= MAX_TARGET_HEADING_DEVIATION_DEG
+                    )
+
+                    if (
+                        steadily_closing
+                        and heading_toward_target
+                        and closing_speed > 0
+                    ):
+                        result["status"] = "inbound"
+                        result["speed_kmh"] = round(closing_speed, 1)
+                        result["eta_min"] = round(
+                            gap_km / closing_speed * 60
+                        )
 
         summaries.append(result)
 
@@ -492,7 +517,7 @@ def save_outputs(frames, summaries, circle_pixels, excluded_labels):
     ) as file:
         fields = [
             "track_id", "status", "start_time_ict", "latest_time_ict",
-            "direction", "speed_kmh", "distance_to_cell_km",
+            "direction", "target_alignment_deg", "speed_kmh", "distance_to_cell_km",
             "eta_min", "peak_dbz", "pixel_count",
         ]
         writer = csv.DictWriter(file, fieldnames=fields)
@@ -507,6 +532,7 @@ def save_outputs(frames, summaries, circle_pixels, excluded_labels):
                 "start_time_ict": observations[0]["time_ict"].isoformat(),
                 "latest_time_ict": latest["time_ict"].isoformat(),
                 "direction": item["direction"],
+                "target_alignment_deg": item["target_alignment_deg"],
                 "speed_kmh": item["speed_kmh"],
                 "distance_to_cell_km": item["gap_km"],
                 "eta_min": item["eta_min"],
