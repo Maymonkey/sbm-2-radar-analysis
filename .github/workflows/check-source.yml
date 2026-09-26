@@ -300,6 +300,57 @@ jobs:
               )
           PY
 
+      - name: Draw SBM-2 analysis area
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from PIL import Image, ImageDraw
+
+          config = json.loads(Path("config/legend_anchors.json").read_text())
+          area = config["analysis_area"]
+
+          images = sorted(Path("radar_images").glob("*.cappi.png"))
+          if not images:
+              raise SystemExit("No CAPPI images found in radar_images/")
+
+          image_path = images[-1]
+          image = Image.open(image_path).convert("RGB")
+          draw = ImageDraw.Draw(image)
+
+          cx, cy = area["sbm2_pixel_xy"]
+          km_per_pixel = area["source_km_per_pixel"]
+          radius_px = area["radius_km"] / km_per_pixel
+          half_cell_px = area["target_cell_size_km"] / (2 * km_per_pixel)
+
+          # วงสีชมพู: พื้นที่รอบ SBM-2 ระยะ 60 กม.
+          draw.ellipse(
+              (cx - radius_px, cy - radius_px, cx + radius_px, cy + radius_px),
+              outline=(255, 0, 255),
+              width=3,
+          )
+
+          # กรอบสีฟ้า: เซลล์ 5 × 5 กม. ตรงจุด SBM-2
+          draw.rectangle(
+              (cx - half_cell_px, cy - half_cell_px,
+               cx + half_cell_px, cy + half_cell_px),
+              outline=(0, 255, 255),
+              width=3,
+          )
+
+          # กากบาทสีขาวแสดงจุดศูนย์กลางที่ตั้งไว้
+          draw.line((cx - 8, cy, cx + 8, cy), fill=(255, 255, 255), width=2)
+          draw.line((cx, cy - 8, cx, cy + 8), fill=(255, 255, 255), width=2)
+
+          output = Path("radar_images/diagnostic-area.png")
+          image.save(output)
+          print(f"Input: {image_path}")
+          print(f"SBM-2 pixel: ({cx}, {cy})")
+          print(f"60 km radius: {radius_px:.1f} pixels")
+          print(f"5 km cell: {2 * half_cell_px:.1f} pixels wide")
+          print(f"Saved: {output}")
+          PY
+
       - name: Save images as a temporary artifact
         if: success()
         uses: actions/upload-artifact@v4
