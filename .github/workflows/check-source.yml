@@ -5,7 +5,7 @@ on:
   schedule:
     # Cron is UTC; minute values stay the same in ICT (UTC+07:00).
     # Starts at :02, then every six minutes: :02, :08, ... :56.
-    - cron: '2-59/6 * * * *'
+    - cron: '2,8,14,20,26,32,38,44,50,56 * * * *'
   push:
     branches: [main]
     paths:
