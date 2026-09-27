@@ -1,7 +1,7 @@
 """Analyse the validated latest scans and export an auditable, local result bundle."""
 import argparse
 import csv
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import os
@@ -163,13 +163,92 @@ def summary_result(frames, rows, cfg, quality, now, replay):
     else:
         status, message = 'no_confirmed_inbound_echo', 'ยังไม่พบกลุ่มสัญญาณเรดาร์ที่ผ่านเกณฑ์มุ่งเข้าพื้นที่ SBM-2 ภายใน 60 นาที'
     nearest = min(current, key=lambda row: row['distance_to_cell_km'], default=None)
-    return {'schema_version': 1, 'model_version': MODEL_VERSION, 'mode': 'historical_replay' if replay else 'live',
+    generated_at = now.astimezone(ICT)
+    observed_at = latest['time']
+    max_age = cfg['analysis']['max_frame_age_minutes']
+    classified = latest['cell_classified_pixels']
+    total = latest['cell_pixels']
+    coverage = classified / total if total else 0.0
+    if latest['cell_ge20_pixels'] > 0:
+        echo_state = 'echo_detected'
+    elif coverage >= 0.8:
+        echo_state = 'no_ge20_echo_observed'
+    else:
+        echo_state = 'unknown'
+
+    if status == 'stale_data':
+        public_message = 'ข้อมูลเรดาร์หมดอายุแล้ว กรุณารอผลวิเคราะห์รอบใหม่'
+    elif status == 'insufficient_data':
+        public_message = 'ภาพเรดาร์ยังไม่ครบหรือขาดช่วง จึงยังสรุปสถานะไม่ได้'
+    elif status == 'echo_at_target':
+        public_message = 'ตรวจพบสัญญาณสะท้อนเรดาร์ในพื้นที่ SBM-2; สัญญาณนี้ยังไม่ยืนยันว่ามีฝนถึงพื้น'
+    elif status == 'inbound_echo':
+        eta = min(row['eta_min'] for row in inbound if row['eta_min'] is not None)
+        public_message = f'พบกลุ่มสัญญาณสะท้อนเรดาร์ที่คาดว่าเคลื่อนเข้าพื้นที่ SBM-2 ในประมาณ {eta} นาที (ผลทดลอง)'
+    elif status == 'uncertain_motion':
+        public_message = 'พบกลุ่มสัญญาณเรดาร์บางส่วน แต่ทิศทางยังไม่ชัด จึงยังประเมินเวลาถึงไม่ได้'
+    else:
+        public_message = 'ยังไม่พบกลุ่มสัญญาณเรดาร์ที่ผ่านเกณฑ์และคาดว่าจะเคลื่อนเข้าพื้นที่ SBM-2 ภายใน 60 นาที; ไม่ได้ยืนยันว่าจะไม่มีฝน'
+
+    public_arrivals = []
+    if quality['forecast_allowed']:
+        for row in sorted(inbound, key=lambda item: item['eta_min'] if item['eta_min'] is not None else float('inf')):
+            public_arrivals.append({
+                'arrival_in_minutes_estimate': row['eta_min'],
+                'direction_of_motion': row['direction'],
+                'distance_to_target_km': row['distance_to_cell_km'],
+                'reflectivity_dbz_estimate': {
+                    'lower': row['peak_dbz_lower'], 'upper': row['peak_dbz_upper']},
+                'observed_at_ict': row['latest_time_ict'],
+            })
+
+    public_status = status
+    return {'schema_version': 2, 'api_version': '1.0', 'model_version': MODEL_VERSION,
+            'mode': 'historical_replay' if replay else 'live',
             'generated_at_ict': now.astimezone(ICT).isoformat(), 'observed_at_ict': latest['time'].isoformat(),
             'status': status, 'message_th': message, 'forecast_horizon_minutes': cfg['analysis']['forecast_horizon_minutes'],
+            'user_summary': {
+                'status': public_status,
+                'message_th': public_message,
+                'updated_at_ict': generated_at.isoformat(),
+                'observed_at_ict': observed_at.isoformat(),
+                'freshness': {
+                    'state_at_generation': 'stale' if 'stale_latest_scan' in quality['issues'] else
+                        ('degraded' if quality['issues'] else 'fresh'),
+                    'age_minutes_at_generation': quality['scan_age_minutes'],
+                    'valid_until_ict': (observed_at + timedelta(minutes=max_age)).isoformat(),
+                    'max_age_minutes': max_age,
+                    'note_th': 'ผู้ใช้ API ต้องเทียบเวลาปัจจุบันกับ valid_until_ict ทุกครั้ง เพราะ JSON เป็น snapshot',
+                },
+                'target': {'name': cfg['target']['name'], 'latitude': cfg['target']['latitude'],
+                           'longitude': cfg['target']['longitude'],
+                           'analysis_cell_size_km': cfg['target']['cell_size_km']},
+                'target_echo': {
+                    'state': echo_state,
+                    'reflectivity_dbz_estimate': latest['cell_max_estimated_dbz'],
+                    'classified_pixels': classified,
+                    'total_pixels': total,
+                    'coverage_percent': round(100 * coverage, 1),
+                },
+                'forecast': {
+                    'available': bool(quality['forecast_allowed'] and status != 'uncertain_motion'),
+                    'horizon_minutes': cfg['analysis']['forecast_horizon_minutes'],
+                    'arrivals': public_arrivals,
+                    'validation': 'experimental_not_operationally_validated',
+                },
+                'data_quality': {
+                    'state': 'stale' if 'stale_latest_scan' in quality['issues'] else
+                        ('degraded' if quality['issues'] else 'fresh'),
+                    'images_used': quality['frame_count'],
+                    'scan_age_minutes_at_generation': quality['scan_age_minutes'],
+                    'issues': quality['issues'],
+                },
+            },
             'quality': quality, 'target': cfg['target'],
             'target_observation': {'cell_ge20_pixels': latest['cell_ge20_pixels'],
                 'cell_total_pixels': latest['cell_pixels'], 'cell_classified_pixels': latest['cell_classified_pixels'],
-                'max_estimated_dbz': latest['cell_max_estimated_dbz'], 'qualifying_echo_at_target': bool(at_target)},
+                'max_estimated_dbz': latest['cell_max_estimated_dbz'], 'qualifying_echo_at_target': bool(at_target),
+                'echo_state': echo_state, 'coverage_percent': round(100 * coverage, 1)},
             'latest_group_count': len(current), 'nearest_group': nearest,
             'inbound_groups': inbound if quality['forecast_allowed'] else [],
             'validation': {'operationally_validated': False,
