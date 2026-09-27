@@ -2,6 +2,10 @@ name: Check and download Royal Rain radar images
 
 on:
   workflow_dispatch:
+  schedule:
+    # Cron is UTC; minute values stay the same in ICT (UTC+07:00).
+    # Starts at :02, then every six minutes: :02, :08, ... :56.
+    - cron: '2-59/6 * * * *'
   push:
     branches: [main]
     paths:
@@ -47,6 +51,10 @@ jobs:
         run: python scripts/download_radar.py
       - name: Analyse echo shapes and export track history
         run: python scripts/analyze_radar.py
+      - name: Stage the single-file API response
+        run: |
+          mkdir -p public/api
+          cp radar_images/latest-status.json public/api/latest-status.json
       - name: Save validated radar bundle
         id: upload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -55,8 +63,29 @@ jobs:
           path: radar_images/
           if-no-files-found: error
           retention-days: 2
+      - name: Upload GitHub Pages API bundle
+        if: vars.PUBLISH_PAGES == 'true'
+        uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
+        with:
+          path: public/
       - name: Delete older radar bundles after upload succeeds
         env:
           GH_TOKEN: ${{ github.token }}
           NEW_ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
         run: python scripts/artifact_store.py prune
+
+  publish-public-api:
+    if: github.ref == 'refs/heads/main' && vars.PUBLISH_PAGES == 'true'
+    needs: download-images
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Publish the latest JSON API
+        id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
