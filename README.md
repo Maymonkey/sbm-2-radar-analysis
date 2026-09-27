@@ -12,7 +12,7 @@
 - เวลาในชื่อไฟล์เป็น UTC; เวลาในผลวิเคราะห์ทั้งหมดเป็น **ICT / UTC+07:00**
 - คาดการณ์การเคลื่อนที่สูงสุด **60 นาที** นับจากเวลาภาพล่าสุด
 
-**สถานะ:** pipeline มี regression tests และประวัติการติดตามที่ตรวจย้อนหลังได้ แต่แบบจำลองยังเป็น **experimental** และยังไม่ผ่านการวัดความแม่นยำเทียบฝนจริงที่ SBM-2 จึงยังไม่ใช่ระบบเตือนภัยทางทะเลที่รับรองแล้ว ผลลัพธ์อยู่ใน artifact ส่วนตัว ยังไม่มี Public API
+**สถานะ:** pipeline มี regression tests และประวัติการติดตามที่ตรวจย้อนหลังได้ แต่แบบจำลองยังเป็น **experimental** และยังไม่ผ่านการวัดความแม่นยำเทียบฝนจริงที่ SBM-2 จึงยังไม่ใช่ระบบเตือนภัยทางทะเลที่รับรองแล้ว ส่วนสรุป API ถูกจัดรูปแบบไว้แล้ว; GitHub Pages จะเผยแพร่เมื่อเปิดใช้งานตามขั้นตอนด้านล่าง
 
 ## วิธีรันบน GitHub
 
@@ -21,7 +21,15 @@
 3. เมื่อสำเร็จ เปิดรายการรันนั้นแล้วดาวน์โหลด artifact ชื่อ `sattahip-radar-latest-10-<run_id>-<attempt>`
 4. อ่าน `latest-status.json` และ `diagnostic-cloud-shapes.png` ก่อน หากต้องตรวจเส้นทาง ให้เปิด `cloud-track-observations.csv`
 
-Workflow จะรันอีกครั้งเมื่อโค้ดวิเคราะห์/config เปลี่ยนบน `main` และมี Tests แยกสำหรับทุก push/PR **ยังไม่ได้เปิด schedule** การติดตั้งนี้จึงยังไม่อัปเดตเองตลอดวัน หากจะเปิดบริการต่อเนื่อง ต้องเพิ่มตารางรันและตรวจเวลาที่ข้อมูลมาถึงจริงก่อน GitHub Actions ไม่รับประกันเวลารันตรงทุกนาที
+Workflow จะรันตามตารางนาที `:02, :08, :14, ... :56` ของทุกชั่วโมง (cron ตั้งเป็น UTC แต่ค่านาทีตรงกับ ICT) และรันเมื่อโค้ดวิเคราะห์/config เปลี่ยนบน `main`; มี Tests แยกสำหรับทุก push/PR ตารางเป็นเป้าหมายการเรียก ไม่ใช่การรับประกันว่า GitHub Actions จะเริ่มตรงนาทีนั้นเสมอ
+
+### เปิดลิงก์ API เดียวผ่าน GitHub Pages
+
+workflow เตรียม JSON ไว้ที่ `public/api/latest-status.json` และจะ deploy หลังวิเคราะห์สำเร็จเมื่อ repository variable `PUBLISH_PAGES` มีค่า `true` เท่านั้น ก่อนเปิดใช้ ให้ไปที่ **Settings → Pages → Build and deployment → Source: GitHub Actions** แล้วสร้าง variable ชื่อนี้ใน **Settings → Secrets and variables → Actions → Variables** จากนั้นรัน workflow หนึ่งครั้ง ลิงก์ API คือ:
+
+`https://maymonkey.github.io/sbm-2-radar-analysis/api/latest-status.json`
+
+Repository นี้เป็น private; GitHub Pages ใช้กับ private repository ได้เฉพาะแผนที่รองรับ และ site อาจเปิดให้คนทั่วไปเข้าถึงได้ อย่าเปลี่ยน visibility ของ repository เพื่อให้ API ใช้งานได้โดยไม่ตรวจผลกระทบก่อน ตัว JSON มี `valid_until_ict`; client ต้องเทียบเวลาปัจจุบันกับค่านี้ทุกครั้ง เพราะไฟล์ JSON แบบ static ไม่สามารถเปลี่ยนตัวเองเป็น stale หลังเผยแพร่ได้
 
 ## ไฟล์ผลลัพธ์
 
@@ -36,6 +44,8 @@ Workflow จะรันอีกครั้งเมื่อโค้ดว�
 | `download-manifest.json` | แหล่งที่มา เวลา และ SHA-256 ของภาพที่ดาวน์โหลด/กู้จาก artifact |
 | `analysis-manifest.json` | ภาพที่ใช้จริง พร้อม SHA-256 และเวอร์ชัน model/config |
 | `*dBZ.cappi.png` | ภาพต้นฉบับไม่เกิน 10 ภาพ |
+
+สำหรับ consumer ให้เริ่มอ่าน `user_summary` ใน JSON: `status`, `message_th`, `freshness`, `target_echo`, `forecast`, และ `data_quality` เป็นชุดข้อมูลสรุปสำหรับแสดงต่อผู้ใช้ ส่วน `target_echo.state` ที่เป็น `unknown` หมายถึงพื้นที่เป้าหมายมีพิกเซลที่แปลผลได้ไม่พอ ไม่ใช่ “ไม่มีฝน”; `forecast.available` ที่เป็น `false` หมายถึงยังไม่ควรแสดง ETA
 
 `model_eta_min_at_scan` ในตารางประวัติเป็นผลคำนวณย้อนหลังในชุดข้อมูลนั้น ไม่ใช่รายการแจ้งเตือนที่เคยส่งจริง
 
@@ -106,6 +116,6 @@ python scripts/analyze_radar.py --image-dir radar_images --as-of 2026-09-27T01:0
 - ภาพ PCAPPI/echo ระดับสูงไม่ยืนยันฝนที่พื้น ฟ้าผ่า ลมกระโชก หรือคลื่น
 - เก็บเหตุการณ์ย้อนหลังหลายแบบ พร้อมฝนจริงที่ SBM-2 เพื่อวัด missed events, false alarms และความคลาดเคลื่อน ETA ในช่วง 0–60 นาที
 - ทดสอบกลุ่มฝนแยก/รวม ก่อตัว/สลาย และ source ล่ม; โมเดลปัจจุบันสมมติการเคลื่อนที่คงที่และไม่พยากรณ์การก่อตัวใหม่
-- หากสร้าง Public API ภายหลัง ต้องตรวจ freshness ตอนให้บริการด้วย ไม่ใช่อ่านผล JSON เก่าค้างไว้โดยไม่ตรวจอายุ
+- ตรวจ `valid_until_ict` ทุกครั้งที่อ่าน Public API; ค่าที่หมดอายุให้แสดงเป็นข้อมูลเก่าและงดข้อความคาดการณ์
 
 รายละเอียดการรีวิวและการเปลี่ยนแปลงอยู่ใน [docs/review.md](docs/review.md)

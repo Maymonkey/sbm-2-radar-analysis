@@ -283,6 +283,12 @@ class EndToEndTests(unittest.TestCase):
             self.assertEqual(result['status'],'inbound_echo')
             self.assertTrue(result['quality']['forecast_allowed'])
             self.assertEqual(len(result['inbound_groups']),1)
+            self.assertTrue(result['user_summary']['forecast']['available'])
+            self.assertEqual(len(result['user_summary']['forecast']['arrivals']),1)
+            self.assertEqual(result['user_summary']['target_echo']['state'],'unknown')
+            self.assertEqual(result['user_summary']['target_echo']['coverage_percent'],0.0)
+            self.assertEqual(result['user_summary']['freshness']['valid_until_ict'],
+                             (BASE+timedelta(minutes=72)).isoformat())
             with (root/'cloud-track-observations.csv').open() as f: rows=list(csv.DictReader(f))
             self.assertEqual(len(rows),10)
             self.assertEqual(len({r['track_id'] for r in rows}),1)
@@ -297,6 +303,8 @@ class EndToEndTests(unittest.TestCase):
             result=analyze(root,CFG,now=BASE)
             self.assertEqual(result['status'],'insufficient_data')
             self.assertEqual(result['inbound_groups'],[])
+            self.assertEqual(result['user_summary']['target_echo']['state'],'unknown')
+            self.assertEqual(result['user_summary']['data_quality']['state'],'degraded')
 
 
 if __name__=='__main__': unittest.main()
