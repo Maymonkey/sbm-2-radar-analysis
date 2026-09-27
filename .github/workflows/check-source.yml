@@ -2,10 +2,12 @@ name: Check and download Royal Rain radar images
 
 on:
   workflow_dispatch:
-  schedule:
-    # Cron is UTC; minute values stay the same in ICT (UTC+07:00).
-    # Starts at :02, then every six minutes: :02, :08, ... :56.
-    - cron: '2,8,14,20,26,32,38,44,50,56 * * * *'
+    inputs:
+      continue_refresh:
+        description: Continue the six-minute refresh chain (normally leave disabled)
+        required: false
+        type: boolean
+        default: false
   push:
     branches: [main]
     paths:
@@ -89,3 +91,66 @@ jobs:
       - name: Publish the latest JSON API
         id: deployment
         uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
+
+  continue-six-minute-refresh:
+    # Continue only after a successful radar analysis. Pages is optional and may be skipped.
+    if: >-
+      always() && !cancelled() &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || inputs.continue_refresh) &&
+      needs.download-images.result == 'success' &&
+      (needs.publish-public-api.result == 'success' || needs.publish-public-api.result == 'skipped')
+    needs: [download-images, publish-public-api]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch the next refresh at the next six-minute ICT slot
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPOSITORY: ${{ github.repository }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import time
+          from datetime import datetime, timedelta, timezone
+          from urllib.request import Request, urlopen
+
+          now = datetime.now(timezone.utc)
+          slot = now.replace(second=0, microsecond=0)
+          while slot <= now or slot.minute % 6 != 2:
+              slot += timedelta(minutes=1)
+
+          print(f"Current UTC time: {now.isoformat()}")
+          print(f"Next refresh slot: {slot.isoformat()} (ICT {slot + timedelta(hours=7):%Y-%m-%d %H:%M:%S})")
+          while True:
+              remaining = (slot - datetime.now(timezone.utc)).total_seconds()
+              if remaining <= 0:
+                  break
+              time.sleep(min(30, remaining))
+
+          repository = os.environ["GH_REPOSITORY"]
+          endpoint = f"https://api.github.com/repos/{repository}/actions/workflows/check-source.yml/dispatches"
+          payload = json.dumps({
+              "ref": "main",
+              "inputs": {"continue_refresh": "true"},
+          }).encode()
+          request = Request(
+              endpoint,
+              data=payload,
+              method="POST",
+              headers={
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                  "Content-Type": "application/json",
+                  "X-GitHub-Api-Version": "2022-11-28",
+                  "User-Agent": "sbm-2-radar-analysis",
+              },
+          )
+          with urlopen(request, timeout=60) as response:
+              if response.status != 204:
+                  raise RuntimeError(f"Workflow dispatch failed: HTTP {response.status}")
+              print("Next refresh dispatched successfully (HTTP 204).")
+          PY
