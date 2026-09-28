@@ -38,7 +38,7 @@
       321
     ],
     "cell_size_km": 5,
-    "analysis_radius_km": 100
+    "analysis_radius_km": 150
   },
   "georeferencing_verified": false,
   "legend": {
