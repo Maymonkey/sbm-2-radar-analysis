@@ -2,7 +2,7 @@ name: Recover stopped radar refresh
 
 on:
   schedule:
-    - cron: '17,47 * * * *'
+    - cron: '2,8,14,20,26,32,38,44,50,56 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -21,7 +21,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
-      - name: Restart only when no radar refresh is active
+      - name: Recover stopped or stalled radar refreshes
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPOSITORY: ${{ github.repository }}

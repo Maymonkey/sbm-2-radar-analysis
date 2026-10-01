@@ -8,7 +8,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
-def github_request(repository, token, resource, payload=None):
+def github_request(repository, token, resource, payload=None, expected_status=204):
     """Retry transient GitHub errors; never log credentials or response bodies."""
     request = Request(
         f"https://api.github.com/repos/{repository}/{resource}",
@@ -26,8 +26,8 @@ def github_request(repository, token, resource, payload=None):
         try:
             with urlopen(request, timeout=30) as response:
                 if payload is not None:
-                    if response.status != 204:
-                        raise RuntimeError(f"Unexpected dispatch status: HTTP {response.status}")
+                    if response.status != expected_status:
+                        raise RuntimeError(f"Unexpected GitHub status: HTTP {response.status}")
                     return None
                 return json.load(response)
         except HTTPError as exc:
@@ -62,10 +62,27 @@ def recover(repository, token, now):
     runs = github_request(repository, token,
                           "actions/workflows/check-source.yml/runs?per_page=100")["workflow_runs"]
     runs = [run for run in runs if run["head_branch"] == "main"]
-    if any(run["status"] != "completed" for run in runs):
+    # Waiting for an environment does not consume a job's timeout. A waiting
+    # deployment previously blocked the chain indefinitely and fooled recovery.
+    # Bound liveness by run age, even when GitHub still calls the run active.
+    active = [run for run in runs if run["status"] != "completed"]
+    stalled = []
+    for run in active:
+        started = datetime.fromisoformat(run["created_at"].replace("Z", "+00:00"))
+        if (now - started).total_seconds() >= 30 * 60:
+            stalled.append(run)
+            print(f"Cancelling stalled radar run {run['id']} ({run['status']}).", flush=True)
+            try:
+                github_request(repository, token, f"actions/runs/{run['id']}/force-cancel",
+                               {}, expected_status=202)
+            except HTTPError as exc:
+                if exc.code != 409:  # The run may have completed while we checked.
+                    raise
+                exc.close()
+    if any(run not in stalled for run in active):
         print("Radar refresh is active or queued; recovery skipped.", flush=True)
         return False
-    if runs:
+    if runs and not stalled:
         latest = max(datetime.fromisoformat(run["updated_at"].replace("Z", "+00:00")) for run in runs)
         if (now - latest).total_seconds() < 120:
             print("A refresh just finished; allow the next dispatch to appear.", flush=True)

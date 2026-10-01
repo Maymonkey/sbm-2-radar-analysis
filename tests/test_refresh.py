@@ -12,9 +12,9 @@ from refresh_radar import github_request, next_slot, recover
 
 
 class RefreshTests(unittest.TestCase):
-    def response(self):
+    def response(self, status=204):
         response = MagicMock()
-        response.__enter__.return_value.status = 204
+        response.__enter__.return_value.status = status
         return response
 
     @patch("refresh_radar.time.sleep")
@@ -57,10 +57,56 @@ class RefreshTests(unittest.TestCase):
     @patch("refresh_radar.dispatch")
     @patch("refresh_radar.github_request")
     def test_recovery_skips_active_and_pending_runs(self, request, dispatch):
+        now = datetime(2026, 10, 1, 7, 8, tzinfo=timezone.utc)
         for status in ("in_progress", "queued", "pending", "waiting"):
-            request.return_value = {"workflow_runs": [{"head_branch": "main", "status": status}]}
-            self.assertFalse(recover("owner/repo", "test-token", datetime.now(timezone.utc)))
+            request.return_value = {"workflow_runs": [{"head_branch": "main", "status": status,
+                                                       "created_at": "2026-10-01T07:02:01Z"}]}
+            self.assertFalse(recover("owner/repo", "test-token", now))
         dispatch.assert_not_called()
+
+    @patch("refresh_radar.dispatch")
+    @patch("refresh_radar.github_request")
+    def test_recovery_cancels_overnight_waiting_deployment(self, request, dispatch):
+        # Actual failure: analysis succeeded at 02:02 ICT, Pages waited all day.
+        request.side_effect = [{"workflow_runs": [{"id": 628, "head_branch": "main",
+                              "status": "waiting", "created_at": "2026-09-30T19:02:01Z",
+                              "updated_at": "2026-09-30T19:02:39Z"}]}, None]
+        self.assertTrue(recover("owner/repo", "test-token",
+                               datetime(2026, 10, 1, 7, 8, tzinfo=timezone.utc)))
+        request.assert_any_call("owner/repo", "test-token", "actions/runs/628/force-cancel",
+                                {}, expected_status=202)
+        dispatch.assert_called_once_with("owner/repo", "test-token")
+
+    @patch("refresh_radar.dispatch")
+    @patch("refresh_radar.github_request")
+    def test_stalled_run_does_not_cancel_recent_refresh(self, request, dispatch):
+        request.side_effect = [{"workflow_runs": [
+            {"id": 628, "head_branch": "main", "status": "waiting", "created_at": "2026-09-30T19:02:01Z"},
+            {"id": 629, "head_branch": "main", "status": "in_progress", "created_at": "2026-10-01T07:02:01Z"},
+        ]}, None]
+        self.assertFalse(recover("owner/repo", "test-token",
+                                datetime(2026, 10, 1, 7, 8, tzinfo=timezone.utc)))
+        request.assert_any_call("owner/repo", "test-token", "actions/runs/628/force-cancel",
+                                {}, expected_status=202)
+        dispatch.assert_not_called()
+
+    @patch("refresh_radar.time.sleep")
+    @patch("refresh_radar.urlopen")
+    def test_force_cancel_accepts_http_202(self, open_url, sleep):
+        open_url.return_value = self.response(202)
+        github_request("owner/repo", "test-token", "actions/runs/628/force-cancel",
+                       {}, expected_status=202)
+        sleep.assert_not_called()
+
+    @patch("refresh_radar.dispatch")
+    @patch("refresh_radar.github_request")
+    def test_completed_run_race_does_not_block_recovery(self, request, dispatch):
+        request.side_effect = [{"workflow_runs": [{"id": 628, "head_branch": "main", "status": "waiting",
+                              "created_at": "2026-09-30T19:02:01Z"}]},
+                              HTTPError("https://api.github.com/", 409, "completed", {}, BytesIO())]
+        self.assertTrue(recover("owner/repo", "test-token",
+                               datetime(2026, 10, 1, 7, 8, tzinfo=timezone.utc)))
+        dispatch.assert_called_once()
 
     @patch("refresh_radar.dispatch")
     @patch("refresh_radar.github_request")
