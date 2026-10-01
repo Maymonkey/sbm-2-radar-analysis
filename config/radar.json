@@ -40,7 +40,7 @@
     "cell_size_km": 5,
     "analysis_radius_km": 150
   },
-  "georeferencing_verified": false,
+  "georeferencing_verified": true,
   "legend": {
     "sample_x": 850,
     "bands": [
