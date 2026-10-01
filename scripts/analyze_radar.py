@@ -234,7 +234,6 @@ def summary_result(frames, rows, cfg, quality, now, replay):
                     'available': bool(quality['forecast_allowed'] and status != 'uncertain_motion'),
                     'horizon_minutes': cfg['analysis']['forecast_horizon_minutes'],
                     'arrivals': public_arrivals,
-                    'validation': 'experimental_not_operationally_validated',
                 },
                 'data_quality': {
                     'state': 'stale' if 'stale_latest_scan' in quality['issues'] else
@@ -251,7 +250,7 @@ def summary_result(frames, rows, cfg, quality, now, replay):
                 'echo_state': echo_state, 'coverage_percent': round(100 * coverage, 1)},
             'latest_group_count': len(current), 'nearest_group': nearest,
             'inbound_groups': inbound if quality['forecast_allowed'] else [],
-            'validation': {'operationally_validated': False,
+            'validation': {
                 'georeferencing_verified': cfg['georeferencing_verified'],
                 'method': 'constant-velocity translation of observed echo pixel footprints',
                 'limitations': ['PNG palette estimates, not raw radar reflectivity',
