@@ -19,13 +19,11 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: radar-pipeline-${{ github.repository }}
-  # A new refresh must be able to replace an indefinitely waiting deployment.
-  cancel-in-progress: true
-
 jobs:
   download-images:
+    concurrency:
+      group: radar-analysis-${{ github.repository }}
+      cancel-in-progress: false
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -78,6 +76,9 @@ jobs:
         run: python scripts/artifact_store.py prune
 
   publish-public-api:
+    concurrency:
+      group: radar-pages-${{ github.repository }}
+      cancel-in-progress: true
     if: github.ref == 'refs/heads/main' && vars.PUBLISH_PAGES == 'true'
     needs: download-images
     runs-on: ubuntu-latest
@@ -94,6 +95,9 @@ jobs:
         uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
 
   continue-six-minute-refresh:
+    concurrency:
+      group: radar-refresh-chain-${{ github.repository }}
+      cancel-in-progress: true
     # Continue after analysis, independently of Pages approval or deployment.
     if: >-
       always() && !cancelled() &&
